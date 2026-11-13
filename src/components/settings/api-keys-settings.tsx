@@ -70,6 +70,12 @@ function keyStatus(k: ApiKey): 'active' | 'revoked' | 'expired' {
 }
 
 export function ApiKeysSettings() {
+  const { accountId, user } = useAuth();
+  if (!accountId) return null;
+  return <ApiKeysSettingsPanel key={`${user?.id}:${accountId}`} />;
+}
+
+function ApiKeysSettingsPanel() {
   const { canEditSettings } = useAuth();
   const t = useTranslations('Settings.apiKeys');
 
@@ -78,23 +84,23 @@ export function ApiKeysSettings() {
   const [createOpen, setCreateOpen] = useState(false);
   const [revoking, setRevoking] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    try {
-      const res = await fetch('/api/account/api-keys', { cache: 'no-store' });
-      if (!res.ok) {
-        const payload = await res.json().catch(() => ({}));
-        toast.error(payload.error || t('loadFailed'));
-        return;
-      }
-      const data = (await res.json()) as { keys: ApiKey[] };
-      setKeys(data.keys);
-    } catch (err) {
-      console.error('[ApiKeysSettings] load error:', err);
-      toast.error(t('networkError'));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const load = useCallback(() => {
+    return fetch('/api/account/api-keys', { cache: 'no-store' })
+      .then(async (res) => {
+        if (!res.ok) {
+          const payload = await res.json().catch(() => ({}));
+          toast.error(payload.error || t('loadFailed'));
+          return;
+        }
+        const data = (await res.json()) as { keys: ApiKey[] };
+        setKeys(data.keys);
+      })
+      .catch((err) => {
+        console.error('[ApiKeysSettings] load error:', err);
+        toast.error(t('networkError'));
+      })
+      .finally(() => setLoading(false));
+  }, [t]);
 
   useEffect(() => {
     void load();

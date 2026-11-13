@@ -5,17 +5,17 @@ services:
     build:
       context: .
       # NEXT_PUBLIC_* vars are inlined at build time — forward them
-      # from .env.local as build args. Changing any of them requires
+      # from the Compose interpolation env as build args. Changing them requires
       # a rebuild (docker compose up --build).
       args:
         NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
         NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
         NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-}
         NEXT_PUBLIC_APP_LOCALE: ${NEXT_PUBLIC_APP_LOCALE:-en}
-    # Runtime (server-only) secrets come from .env.local; they are
+    # Runtime (server-only) secrets come from APP_ENV_FILE (.env.local by default); they are
     # never baked into the image.
     env_file:
-      - .env.local
+      - ${APP_ENV_FILE:-.env.local}
     # The server always listens on 3000 inside the container. Pinned
     # here because `environment` wins over `env_file`, so a stray PORT
     # in .env.local can't desync the app from the mapping and the
@@ -25,6 +25,8 @@ services:
     # Host side only — HOST_PORT=8080 publishes the app on :8080.
     ports:
       - '${HOST_PORT:-3000}:3000'
+    expose:
+      - '3000'
     restart: unless-stopped
     healthcheck:
       test:

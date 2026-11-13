@@ -16,6 +16,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { SettingsPanelHead } from "./settings-panel-head";
+import { useAuth } from "@/hooks/use-auth";
 import {
   InteractiveBuilder,
   blankButtonsPayload,
@@ -44,9 +45,15 @@ function emptyDraft(): DraftState {
 }
 
 export function QuickRepliesManager() {
+  const { user, accountId } = useAuth();
+  return <AccountQuickRepliesManager key={`${user?.id}:${accountId}`} />;
+}
+
+function AccountQuickRepliesManager() {
+  const { user, accountId, loading: authLoading } = useAuth();
   const t = useTranslations("Settings.quickReplies");
   const [items, setItems] = useState<QuickReply[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(Boolean(user && accountId));
   const [draft, setDraft] = useState<DraftState | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -62,8 +69,22 @@ export function QuickRepliesManager() {
   }, []);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (authLoading || !user || !accountId) return;
+    let ignore = false;
+    async function fetchItems() {
+      try {
+        const res = await fetch("/api/quick-replies", { cache: "no-store" });
+        const data = await res.json().catch(() => ({}));
+        if (!ignore && res.ok) setItems((data.quick_replies as QuickReply[]) ?? []);
+      } catch (err) {
+        if (!ignore) console.error("Failed to fetch quick replies:", err);
+      } finally {
+        if (!ignore) setLoading(false);
+      }
+    }
+    void fetchItems();
+    return () => { ignore = true; };
+  }, [authLoading, user, accountId]);
 
   const openCreate = () => setDraft(emptyDraft());
   const openEdit = (qr: QuickReply) =>
@@ -138,7 +159,7 @@ export function QuickRepliesManager() {
         }
       />
 
-      {loading ? (
+      {authLoading || loading ? (
         <div className="flex justify-center py-10">
           <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
         </div>

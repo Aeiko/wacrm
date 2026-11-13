@@ -44,11 +44,16 @@ const PRESET_COLORS = [
  * dialog since it detaches the tag from every contact.
  */
 export function TagManager() {
+  const { user, accountId } = useAuth();
+  return <AccountTagManager key={`${user?.id}:${accountId}`} />;
+}
+
+function AccountTagManager() {
   const t = useTranslations('Settings.tagsAndFields');
   const supabase = createClient();
   const { user, accountId, loading: authLoading } = useAuth();
 
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(Boolean(user && accountId));
   const [tags, setTags] = useState<Tag[]>([]);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [tagToDelete, setTagToDelete] = useState<Tag | null>(null);
@@ -58,14 +63,22 @@ export function TagManager() {
   const [selectedColor, setSelectedColor] = useState(PRESET_COLORS[3].value);
 
   useEffect(() => {
-    if (authLoading) return;
-    if (!user || !accountId) {
-      setLoading(false);
-      return;
-    }
-    fetchTags(accountId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authLoading, user?.id, accountId]);
+    if (authLoading || !user || !accountId) return;
+    let ignore = false;
+    fetchAccountTags(supabase, accountId)
+      .then((items) => {
+        if (!ignore) setTags(items);
+      })
+      .catch((err) => {
+        if (ignore) return;
+        console.error('Failed to fetch tags:', err);
+        toast.error(t('failedToLoadTags'));
+      })
+      .finally(() => {
+        if (!ignore) setLoading(false);
+      });
+    return () => { ignore = true; };
+  }, [authLoading, user, accountId, supabase, t]);
 
   async function fetchTags(acctId: string) {
     try {
@@ -156,7 +169,7 @@ export function TagManager() {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        {loading ? (
+        {authLoading || loading ? (
           <div className="flex items-center justify-center py-8">
             <Loader2 className="size-6 animate-spin text-primary" />
           </div>

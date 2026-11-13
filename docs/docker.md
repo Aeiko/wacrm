@@ -2,9 +2,10 @@
 
 The repo ships a multi-stage `Dockerfile` (Next.js standalone output,
 runs as a non-root user) and a `docker-compose.yml` with a single
-`app` service. Supabase is external — point the app at your hosted
-(or self-hosted) Supabase project via env vars; no database container
-is included.
+`app` service. Supabase runs separately — point the app at your hosted
+(or self-hosted) Supabase project via env vars. For the included backend
+Compose stack, local quickstart, and two-project Dokploy deployment, see
+[self-hosting WACRM and Supabase](self-hosting.md).
 
 ## Quick start
 

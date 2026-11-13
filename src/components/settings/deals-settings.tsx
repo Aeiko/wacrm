@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
 import { Coins, Loader2 } from "lucide-react";
 
@@ -29,6 +29,11 @@ import { SettingsPanelHead } from "./settings-panel-head";
  * admins+, so non-admins see a disabled, read-only control.
  */
 export function DealsSettings() {
+  const { user, accountId } = useAuth();
+  return <DealsDraft key={`${user?.id ?? ''}:${accountId ?? ''}`} />;
+}
+
+function DealsDraft() {
   const supabase = createClient();
   const {
     accountId,
@@ -38,15 +43,10 @@ export function DealsSettings() {
     refreshProfile,
   } = useAuth();
 
-  const [selected, setSelected] = useState(defaultCurrency);
+  const [currencyDraft, setSelected] = useState<string | null>(null);
+  const selected = currencyDraft ?? defaultCurrency;
   const [saving, setSaving] = useState(false);
   const t = useTranslations("Settings.deals");
-
-  // Keep the select in sync once the profile (and its account default)
-  // resolves, and after a save round-trips through refreshProfile.
-  useEffect(() => {
-    setSelected(defaultCurrency);
-  }, [defaultCurrency]);
 
   const dirty = selected !== defaultCurrency;
 
@@ -65,6 +65,7 @@ export function DealsSettings() {
     // Pull the new value back into the auth context so the deal form
     // and every total pick it up without a full reload.
     await refreshProfile();
+    setSelected((draft) => draft === currencyDraft ? null : draft);
     setSaving(false);
     toast.success(t("saveSuccess"));
   }

@@ -171,7 +171,7 @@ const ScrollButton = ({ icon, onClick, disabled }: ScrollButtonProps) => {
   const intervalRef = React.useRef<NodeJS.Timeout | null>(null)
 
   React.useEffect(() => {
-    if (isPressed) {
+    if (isPressed && !disabled) {
       intervalRef.current = setInterval(() => {
         onClick?.()
       }, 300)
@@ -179,14 +179,11 @@ const ScrollButton = ({ icon, onClick, disabled }: ScrollButtonProps) => {
       clearInterval(intervalRef.current as NodeJS.Timeout)
     }
     return () => clearInterval(intervalRef.current as NodeJS.Timeout)
-  }, [isPressed, onClick])
+  }, [isPressed, disabled, onClick])
 
-  React.useEffect(() => {
-    if (disabled) {
-      clearInterval(intervalRef.current as NodeJS.Timeout)
-      setIsPressed(false)
-    }
-  }, [disabled])
+  if (disabled && isPressed) {
+    setIsPressed(false)
+  }
 
   return (
     <button
@@ -312,17 +309,22 @@ const Legend = React.forwardRef<HTMLOListElement, LegendProps>((props, ref) => {
 
   React.useEffect(() => {
     const scrollable = scrollableRef?.current
-    if (enableLegendSlider) {
-      checkScroll()
-      scrollable?.addEventListener("keydown", keyDown)
-      scrollable?.addEventListener("keyup", keyUp)
-    }
+    if (!enableLegendSlider || !scrollable) return
+    // Observation delivers the initial measurement as well as layout changes.
+    const observer = new ResizeObserver(checkScroll)
+    observer.observe(scrollable)
+    for (const child of scrollable.children) observer.observe(child)
+    scrollable.addEventListener("scroll", checkScroll)
+    scrollable.addEventListener("keydown", keyDown)
+    scrollable.addEventListener("keyup", keyUp)
 
     return () => {
-      scrollable?.removeEventListener("keydown", keyDown)
-      scrollable?.removeEventListener("keyup", keyUp)
+      observer.disconnect()
+      scrollable.removeEventListener("scroll", checkScroll)
+      scrollable.removeEventListener("keydown", keyDown)
+      scrollable.removeEventListener("keyup", keyUp)
     }
-  }, [checkScroll, enableLegendSlider])
+  }, [checkScroll, enableLegendSlider, categories])
 
   return (
     <ol

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useMemo, useRef } from 'react';
+import { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { Broadcast } from '@/types';
@@ -70,26 +70,32 @@ export default function BroadcastsPage() {
   // Used to kick off polling only while something is actively sending.
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  async function fetchBroadcasts() {
-    try {
-      const supabase = createClient();
-      const { data, error: fetchError } = await supabase
-        .from('broadcasts')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      if (fetchError) throw fetchError;
-      setBroadcasts(data ?? []);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t('errorLoad'));
-    } finally {
-      setLoading(false);
-    }
-  }
+  const fetchBroadcasts = useCallback((signal?: AbortSignal) => {
+    const supabase = createClient();
+    return Promise.resolve(supabase
+      .from('broadcasts')
+      .select('*')
+      .order('created_at', { ascending: false }))
+      .then(({ data, error: fetchError }) => {
+        if (signal?.aborted) return;
+        if (fetchError) throw fetchError;
+        setBroadcasts(data ?? []);
+      })
+      .catch((err: unknown) => {
+        if (!signal?.aborted) {
+          setError(err instanceof Error ? err.message : t('errorLoad'));
+        }
+      })
+      .finally(() => {
+        if (!signal?.aborted) setLoading(false);
+      });
+  }, [t]);
 
   useEffect(() => {
-    fetchBroadcasts();
-  }, []);
+    const controller = new AbortController();
+    fetchBroadcasts(controller.signal);
+    return () => controller.abort();
+  }, [fetchBroadcasts]);
 
   const anySending = useMemo(
     () => broadcasts.some((b) => b.status === 'sending'),
@@ -97,9 +103,13 @@ export default function BroadcastsPage() {
   );
 
   useEffect(() => {
+    const controller = new AbortController();
+    function refresh() {
+      fetchBroadcasts(controller.signal);
+    }
     function startPolling() {
       if (pollTimer.current) return;
-      pollTimer.current = setInterval(fetchBroadcasts, POLL_INTERVAL_MS);
+      pollTimer.current = setInterval(refresh, POLL_INTERVAL_MS);
     }
     function stopPolling() {
       if (!pollTimer.current) return;
@@ -115,7 +125,7 @@ export default function BroadcastsPage() {
       if (document.visibilityState === 'hidden') {
         stopPolling();
       } else {
-        fetchBroadcasts();
+        refresh();
         startPolling();
       }
     }
@@ -127,10 +137,11 @@ export default function BroadcastsPage() {
     }
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => {
+      controller.abort();
       stopPolling();
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [anySending]);
+  }, [anySending, fetchBroadcasts]);
 
   if (loading) {
     return (

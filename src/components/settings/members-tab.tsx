@@ -125,6 +125,12 @@ function fmtExpiresIn(iso: string, t: (key: string, values?: Record<string, stri
 }
 
 export function MembersTab() {
+  const { accountId, user, canManageMembers } = useAuth();
+  if (!accountId) return null;
+  return <MembersPanel key={`${user?.id}:${accountId}:${canManageMembers}`} />;
+}
+
+function MembersPanel() {
   const t = useTranslations('Settings.members');
   const tRoles = useTranslations('Settings.roles');
   const { user, canManageMembers } = useAuth();
@@ -140,14 +146,13 @@ export function MembersTab() {
     null,
   );
 
-  const loadEverything = useCallback(async () => {
-    try {
-      const [mres, ires] = await Promise.all([
-        fetch('/api/account/members', { cache: 'no-store' }),
-        canManageMembers
-          ? fetch('/api/account/invitations', { cache: 'no-store' })
-          : Promise.resolve(null),
-      ]);
+  const loadEverything = useCallback(() => {
+    return Promise.all([
+      fetch('/api/account/members', { cache: 'no-store' }),
+      canManageMembers
+        ? fetch('/api/account/invitations', { cache: 'no-store' })
+        : Promise.resolve(null),
+    ]).then(async ([mres, ires]) => {
 
       if (!mres.ok) {
         const payload = await mres.json().catch(() => ({}));
@@ -168,12 +173,10 @@ export function MembersTab() {
       } else {
         setInvitations([]);
       }
-    } catch (err) {
+    }).catch((err) => {
       console.error('[MembersTab] load error:', err);
       toast.error(t('networkError'));
-    } finally {
-      setLoading(false);
-    }
+    }).finally(() => setLoading(false));
   }, [canManageMembers, t]);
 
   useEffect(() => {

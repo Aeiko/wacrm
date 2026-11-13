@@ -132,6 +132,11 @@ function emptyButton(type: TemplateButton['type']): TemplateButton {
 }
 
 export function TemplateManager() {
+  const { user, accountId } = useAuth();
+  return <AccountTemplateManager key={`${user?.id}:${accountId}`} />;
+}
+
+function AccountTemplateManager() {
   const t = useTranslations('Settings.templates');
   // Meta's category ids (stored as-is) → display label in the UI language.
   const categoryLabel = (category: string) =>
@@ -139,7 +144,7 @@ export function TemplateManager() {
   const supabase = createClient();
   const { user, accountId, loading: authLoading } = useAuth();
 
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(Boolean(user && accountId));
   const [templates, setTemplates] = useState<MessageTemplate[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -180,26 +185,30 @@ export function TemplateManager() {
     [form.header_format, form.header_content],
   );
 
-  // Resize body_samples so it always has exactly bodyVarCount entries.
-  // (We mutate via setForm in an effect so React owns the state.)
-  useEffect(() => {
-    setForm((prev) => {
-      if (prev.body_samples.length === bodyVarCount) return prev;
-      const next = prev.body_samples.slice(0, bodyVarCount);
-      while (next.length < bodyVarCount) next.push('');
-      return { ...prev, body_samples: next };
-    });
-  }, [bodyVarCount]);
+  // Reconcile before rendering sample inputs, preserving existing values.
+  if (form.body_samples.length !== bodyVarCount) {
+    const next = form.body_samples.slice(0, bodyVarCount);
+    while (next.length < bodyVarCount) next.push('');
+    setForm({ ...form, body_samples: next });
+  }
 
   useEffect(() => {
-    if (authLoading) return;
-    if (!user || !accountId) {
-      setLoading(false);
-      return;
-    }
-    fetchTemplates(accountId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authLoading, user?.id, accountId]);
+    if (authLoading || !user || !accountId) return;
+    let ignore = false;
+    fetchAccountTemplates(supabase, accountId)
+      .then((items) => {
+        if (!ignore) setTemplates(items);
+      })
+      .catch((err) => {
+        if (ignore) return;
+        console.error('Failed to fetch templates:', err);
+        toast.error(t('toastLoadFailed'));
+      })
+      .finally(() => {
+        if (!ignore) setLoading(false);
+      });
+    return () => { ignore = true; };
+  }, [authLoading, user, accountId, supabase, t]);
 
   async function fetchTemplates(acctId: string) {
     try {
@@ -455,7 +464,7 @@ export function TemplateManager() {
     }));
   }
 
-  if (loading) {
+  if (authLoading || loading) {
     return (
       <div className="flex items-center justify-center py-12">
         <Loader2 className="size-6 animate-spin text-primary" />

@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import {
@@ -68,23 +68,29 @@ export default function AutomationsPage() {
   const [pendingDelete, setPendingDelete] = useState<Automation | null>(null)
   const [deleting, setDeleting] = useState(false)
 
-  async function load() {
-    try {
-      const supabase = createClient()
-      const { data, error: fetchErr } = await supabase
-        .from("automations")
-        .select("*")
-        .order("created_at", { ascending: false })
-      if (fetchErr) throw fetchErr
-      setAutomations((data ?? []) as Automation[])
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t("loadFailed"))
-    }
-  }
+  const load = useCallback((signal?: AbortSignal) => {
+    const supabase = createClient()
+    return Promise.resolve(supabase
+      .from("automations")
+      .select("*")
+      .order("created_at", { ascending: false }))
+      .then(({ data, error: fetchErr }) => {
+        if (signal?.aborted) return
+        if (fetchErr) throw fetchErr
+        setAutomations((data ?? []) as Automation[])
+      })
+      .catch((err: unknown) => {
+        if (!signal?.aborted) {
+          setError(err instanceof Error ? err.message : t("loadFailed"))
+        }
+      })
+  }, [t])
 
   useEffect(() => {
-    load()
-  }, [])
+    const controller = new AbortController()
+    load(controller.signal)
+    return () => controller.abort()
+  }, [load])
 
   async function toggleActive(a: Automation, next: boolean) {
     // Optimistic flip so the switch feels instant.

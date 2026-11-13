@@ -1,0 +1,3 @@
+# Docker entrypoints and their vendored configuration must keep Unix line endings.
+deploy/supabase/** text eol=lf
+scripts/*.mjs text eol=lf

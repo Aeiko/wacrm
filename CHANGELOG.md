@@ -9,6 +9,20 @@ Versions follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Pre-1.0, `MINOR` bumps cover new modules; `PATCH` bumps cover bug fixes
 and polish.
 
+## [Unreleased]
+
+### Fixed
+
+- Fix React Hooks validation errors without disabling rules, preserving
+  form drafts, asynchronous loading, thread resets, and recording limits.
+
+### Security
+
+- Update Next.js to 16.4.6 and compatible dependencies to resolve the
+  application's high/critical dependency advisories. Add an install-script
+  policy and CI security gate; document remaining tooling findings in
+  `docs/dependency-security.md`. No database migration required.
+
 ## [0.8.1] — 2026-07-10
 
 Fixes inbound chats fragmenting into multiple threads for the same

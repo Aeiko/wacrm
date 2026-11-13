@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { countAudience } from '@/lib/broadcast-audience';
 import { parseBroadcastCsv } from '@/lib/broadcast-csv';
@@ -91,10 +91,27 @@ export function Step2SelectAudience({
   ], [t]);
   const [tags, setTags] = useState<Tag[]>([]);
   const [customFields, setCustomFields] = useState<CustomField[]>([]);
-  const [loadingTags, setLoadingTags] = useState(false);
-  const [loadingFields, setLoadingFields] = useState(false);
-  const [estimatedCount, setEstimatedCount] = useState<number | null>(null);
-  const [loadingCount, setLoadingCount] = useState(false);
+  const [loadingTags, setLoadingTags] = useState(true);
+  const [fieldsForType, setFieldsForType] = useState<AudienceType | null>(null);
+  const [previousType, setPreviousType] = useState(audience.type);
+  if (previousType !== audience.type) {
+    setPreviousType(audience.type);
+    setFieldsForType(null);
+  }
+  const loadingFields = fieldsForType !== audience.type;
+  const countConfig = useMemo(() => ({
+    type: audience.type,
+    tagIds: audience.tagIds,
+    customField: audience.customField,
+    csvContacts: audience.csvContacts,
+    excludeTagIds: audience.excludeTagIds,
+  }), [audience.type, audience.tagIds, audience.customField, audience.csvContacts, audience.excludeTagIds]);
+  const [estimate, setEstimate] = useState<{
+    config: typeof countConfig;
+    count: number | null;
+  } | null>(null);
+  const loadingCount = estimate?.config !== countConfig;
+  const estimatedCount = loadingCount ? null : (estimate?.count ?? null);
   // The picked file's name, shown back to the user. The parsed rows
   // themselves live on `audience.csvContacts` (owned by the wizard) so
   // they survive stepping forward and back.
@@ -106,71 +123,50 @@ export function Step2SelectAudience({
   // picking another audience type wipes `csvContacts`.
   const csvFileName = csvCount > 0 ? pickedCsvName : null;
 
-  // Tags are used both by the primary "Filter by Tags" audience type
-  // AND by the exclude-list below — so always load once on mount.
+  // Tags are also used by the exclude-list, so always load on mount.
   useEffect(() => {
-    async function fetchTags() {
-      setLoadingTags(true);
-      try {
-        const supabase = createClient();
-        const { data } = await supabase.from('tags').select('*').order('name');
-        setTags(data ?? []);
-      } finally {
-        setLoadingTags(false);
-      }
-    }
-    fetchTags();
+    let ignore = false;
+    Promise.resolve(createClient().from('tags').select('*').order('name'))
+      .then(({ data }) => {
+        if (!ignore) setTags(data ?? []);
+      })
+      .catch(() => {
+        if (!ignore) setTags([]);
+      })
+      .finally(() => {
+        if (!ignore) setLoadingTags(false);
+      });
+    return () => { ignore = true; };
   }, []);
 
   // Lazy-load custom fields only when that audience type is active.
   useEffect(() => {
     if (audience.type !== 'custom_field') return;
-    async function fetchFields() {
-      setLoadingFields(true);
-      try {
-        const supabase = createClient();
-        const { data } = await supabase
-          .from('custom_fields')
-          .select('*')
-          .order('field_name');
-        setCustomFields(data ?? []);
-      } finally {
-        setLoadingFields(false);
-      }
-    }
-    fetchFields();
+    let ignore = false;
+    Promise.resolve(createClient().from('custom_fields').select('*').order('field_name'))
+      .then(({ data }) => {
+        if (!ignore) setCustomFields(data ?? []);
+      })
+      .catch(() => {
+        if (!ignore) setCustomFields([]);
+      })
+      .finally(() => {
+        if (!ignore) setFieldsForType('custom_field');
+      });
+    return () => { ignore = true; };
   }, [audience.type]);
 
-  const estimateSeq = useRef(0);
-  const fetchEstimatedCount = useCallback(async () => {
-    const seq = ++estimateSeq.current;
-    setLoadingCount(true);
-    let count: number | null;
-    try {
-      count = await countAudience(createClient(), {
-        type: audience.type,
-        tagIds: audience.tagIds,
-        customField: audience.customField,
-        csvContacts: audience.csvContacts,
-        excludeTagIds: audience.excludeTagIds,
-      });
-    } catch {
-      count = null;
-    }
-    if (seq !== estimateSeq.current) return;
-    setEstimatedCount(count);
-    setLoadingCount(false);
-  }, [
-    audience.type,
-    audience.tagIds,
-    audience.customField,
-    audience.csvContacts,
-    audience.excludeTagIds,
-  ]);
-
   useEffect(() => {
-    fetchEstimatedCount();
-  }, [fetchEstimatedCount]);
+    let ignore = false;
+    countAudience(createClient(), countConfig)
+      .then((count) => {
+        if (!ignore) setEstimate({ config: countConfig, count });
+      })
+      .catch(() => {
+        if (!ignore) setEstimate({ config: countConfig, count: null });
+      });
+    return () => { ignore = true; };
+  }, [countConfig]);
 
   async function handleCsvChange(e: React.ChangeEvent<HTMLInputElement>) {
     const selected = e.target.files?.[0];

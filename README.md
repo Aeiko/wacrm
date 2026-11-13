@@ -95,7 +95,9 @@ The UI ships in English, Korean, Brazilian Portuguese and Spanish — set
 (catalogues live in `messages/`).
 
 Prefer containers? See [docs/docker.md](./docs/docker.md) for the
-Dockerfile + Docker Compose setup.
+Dockerfile + Docker Compose setup. To run the included Supabase backend
+locally or deploy both services with Dokploy, follow
+[docs/self-hosting.md](./docs/self-hosting.md).
 
 ## 🚀 Deploy on Hostinger (recommended)
 

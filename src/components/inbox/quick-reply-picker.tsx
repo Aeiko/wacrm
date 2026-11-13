@@ -31,12 +31,16 @@ export function QuickReplyPicker({
 }: QuickReplyPickerProps) {
   const t = useTranslations("Inbox.composer");
   const [items, setItems] = useState<QuickReply[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(open);
+  const [wasOpen, setWasOpen] = useState(open);
+  if (wasOpen !== open) {
+    setWasOpen(open);
+    setLoading(open);
+  }
 
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    setLoading(true);
     void (async () => {
       try {
         const res = await fetch("/api/quick-replies", { cache: "no-store" });
@@ -44,6 +48,8 @@ export function QuickReplyPicker({
         if (!cancelled && res.ok) {
           setItems((data.quick_replies as QuickReply[]) ?? []);
         }
+      } catch {
+        // Keep the last successful list available after a network failure.
       } finally {
         if (!cancelled) setLoading(false);
       }

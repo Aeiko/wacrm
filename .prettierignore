@@ -6,5 +6,7 @@ coverage
 next-env.d.ts
 package-lock.json
 # Generated / vendored
+deploy/supabase/volumes
+deploy/supabase/LICENSE
 supabase/migrations
 public/opus

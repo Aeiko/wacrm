@@ -43,5 +43,8 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
+# local backup archives contain database contents and secrets
+/backups/
+
 # supabase
 supabase/.temp/

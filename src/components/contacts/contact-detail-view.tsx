@@ -52,7 +52,13 @@ interface ContactDetailViewProps {
   onUpdated: () => void;
 }
 
-export function ContactDetailView({
+export function ContactDetailView(props: ContactDetailViewProps) {
+  const { accountId } = useAuth();
+  if (!props.open || !props.contactId) return null;
+  return <ContactDetail key={`${accountId}:${props.contactId}`} {...props} />;
+}
+
+function ContactDetail({
   open,
   onOpenChange,
   contactId,
@@ -63,7 +69,7 @@ export function ContactDetailView({
   const { accountId, defaultCurrency } = useAuth();
 
   const [contact, setContact] = useState<Contact | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [copiedPhone, setCopiedPhone] = useState(false);
 
   // Send template — lets the business initiate (or re-open) a conversation
@@ -88,110 +94,121 @@ export function ContactDetailView({
   const [notes, setNotes] = useState<ContactNote[]>([]);
   const [newNote, setNewNote] = useState('');
   const [savingNote, setSavingNote] = useState(false);
-  const [loadingNotes, setLoadingNotes] = useState(false);
+  const [loadingNotes, setLoadingNotes] = useState(true);
 
   // Custom fields tab
   const [customFields, setCustomFields] = useState<CustomField[]>([]);
   const [customValues, setCustomValues] = useState<Record<string, string>>({});
   const [savingCustom, setSavingCustom] = useState(false);
-  const [loadingCustom, setLoadingCustom] = useState(false);
+  const [loadingCustom, setLoadingCustom] = useState(true);
 
   // Deals tab
   const [deals, setDeals] = useState<Deal[]>([]);
-  const [loadingDeals, setLoadingDeals] = useState(false);
+  const [loadingDeals, setLoadingDeals] = useState(true);
 
-  const fetchContact = useCallback(async () => {
+  const fetchContact = useCallback((signal?: AbortSignal) => {
     if (!contactId) return;
-    setLoading(true);
-
-    const { data } = await supabase
+    return supabase
       .from('contacts')
       .select('*')
       .eq('id', contactId)
-      .single();
-
-    if (data) {
-      setContact(data);
-      setEditName(data.name ?? '');
-      setEditPhone(data.phone);
-      setEditEmail(data.email ?? '');
-      setEditCompany(data.company ?? '');
-    }
-    setLoading(false);
+      .single()
+      .then(({ data }) => {
+        if (signal?.aborted) return;
+        if (data) {
+          setContact(data);
+          setEditName(data.name ?? '');
+          setEditPhone(data.phone);
+          setEditEmail(data.email ?? '');
+          setEditCompany(data.company ?? '');
+        }
+        setLoading(false);
+      });
   }, [contactId, supabase]);
 
-  const fetchTags = useCallback(async () => {
+  const fetchTags = useCallback((signal?: AbortSignal) => {
     if (!contactId) return;
-
-    const [tagsRes, contactTagsRes] = await Promise.all([
+    return Promise.all([
       supabase.from('tags').select('*').order('name'),
       supabase.from('contact_tags').select('tag_id').eq('contact_id', contactId),
-    ]);
-
-    if (tagsRes.data) setAllTags(tagsRes.data);
-    if (contactTagsRes.data) {
-      setContactTagIds(contactTagsRes.data.map((ct) => ct.tag_id));
-    }
+    ]).then(([tagsRes, contactTagsRes]) => {
+      if (signal?.aborted) return;
+      if (tagsRes.data) setAllTags(tagsRes.data);
+      if (contactTagsRes.data) {
+        setContactTagIds(contactTagsRes.data.map((ct) => ct.tag_id));
+      }
+    });
   }, [contactId, supabase]);
 
-  const fetchNotes = useCallback(async () => {
+  const fetchNotes = useCallback((signal?: AbortSignal) => {
     if (!contactId) return;
-    setLoadingNotes(true);
-
-    const { data } = await supabase
+    return supabase
       .from('contact_notes')
       .select('*')
       .eq('contact_id', contactId)
-      .order('created_at', { ascending: false });
-
-    if (data) setNotes(data);
-    setLoadingNotes(false);
+      .order('created_at', { ascending: false })
+      .then(({ data }) => {
+        if (signal?.aborted) return;
+        if (data) setNotes(data);
+        setLoadingNotes(false);
+      });
   }, [contactId, supabase]);
 
-  const fetchCustomFields = useCallback(async () => {
+  const fetchCustomFields = useCallback((signal?: AbortSignal) => {
     if (!contactId) return;
-    setLoadingCustom(true);
-
-    const [fieldsRes, valuesRes] = await Promise.all([
+    return Promise.all([
       supabase.from('custom_fields').select('*').order('field_name'),
       supabase
         .from('contact_custom_values')
         .select('*')
         .eq('contact_id', contactId),
-    ]);
-
-    if (fieldsRes.data) setCustomFields(fieldsRes.data);
-    if (valuesRes.data) {
-      const map: Record<string, string> = {};
-      valuesRes.data.forEach((v) => {
-        map[v.custom_field_id] = v.value ?? '';
-      });
-      setCustomValues(map);
-    }
-    setLoadingCustom(false);
+    ]).then(([fieldsRes, valuesRes]) => {
+      if (signal?.aborted) return;
+      if (fieldsRes.data) setCustomFields(fieldsRes.data);
+      if (valuesRes.data) {
+        const map: Record<string, string> = {};
+        valuesRes.data.forEach((v) => {
+          map[v.custom_field_id] = v.value ?? '';
+        });
+        setCustomValues(map);
+      }
+      setLoadingCustom(false);
+    });
   }, [contactId, supabase]);
 
-  const fetchDeals = useCallback(async () => {
+  const fetchDeals = useCallback((signal?: AbortSignal) => {
     if (!contactId) return;
-    setLoadingDeals(true);
-    const { data } = await supabase
+    return supabase
       .from('deals')
       .select('*, stage:pipeline_stages(*)')
       .eq('contact_id', contactId)
-      .order('created_at', { ascending: false });
-    setDeals((data ?? []) as Deal[]);
-    setLoadingDeals(false);
+      .order('created_at', { ascending: false })
+      .then(({ data }) => {
+        if (signal?.aborted) return;
+        setDeals((data ?? []) as Deal[]);
+        setLoadingDeals(false);
+      });
   }, [contactId, supabase]);
 
   useEffect(() => {
-    if (open && contactId) {
-      fetchContact();
-      fetchTags();
-      fetchNotes();
-      fetchCustomFields();
-      fetchDeals();
-    }
-  }, [open, contactId, fetchContact, fetchTags, fetchNotes, fetchCustomFields, fetchDeals]);
+    const controller = new AbortController();
+    Promise.all([
+      fetchContact(controller.signal),
+      fetchTags(controller.signal),
+      fetchNotes(controller.signal),
+      fetchCustomFields(controller.signal),
+      fetchDeals(controller.signal),
+    ]).catch(() => {
+      if (!controller.signal.aborted) {
+        setLoading(false);
+        setLoadingNotes(false);
+        setLoadingCustom(false);
+        setLoadingDeals(false);
+        toast.error(t('toastUpdateFailed'));
+      }
+    });
+    return () => controller.abort();
+  }, [fetchContact, fetchTags, fetchNotes, fetchCustomFields, fetchDeals, t]);
 
   async function copyPhone() {
     if (!contact) return;
@@ -232,6 +249,7 @@ export function ContactDetailView({
       toast.error(t('toastUpdateFailed'));
     } else {
       toast.success(t('toastUpdated'));
+      setLoading(true);
       fetchContact();
       onUpdated();
     }
@@ -284,6 +302,7 @@ export function ContactDetailView({
       toast.error(t('toastNoteAddFailed'));
     } else {
       setNewNote('');
+      setLoadingNotes(true);
       fetchNotes();
       toast.success(t('toastNoteAdded'));
     }

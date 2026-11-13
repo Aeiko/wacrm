@@ -61,6 +61,11 @@ type WabaSubscription = {
 };
 
 export function WhatsAppConfig() {
+  const { user, accountId } = useAuth();
+  return <WhatsAppAccountConfig key={`${user?.id ?? ''}:${accountId ?? ''}`} />;
+}
+
+function WhatsAppAccountConfig() {
   const t = useTranslations('Settings.whatsapp');
   const supabase = createClient();
   // After multi-user, whatsapp_config is one-row-per-account, not
@@ -76,7 +81,8 @@ export function WhatsAppConfig() {
     canEditSettings,
   } = useAuth();
 
-  const [loading, setLoading] = useState(true);
+  const [requestLoading, setLoading] = useState(true);
+  const loading = authLoading || profileLoading || Boolean(user && accountId && requestLoading);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [resetting, setResetting] = useState(false);
@@ -140,24 +146,23 @@ export function WhatsAppConfig() {
       ? `${window.location.origin}/api/whatsapp/webhook`
       : '';
 
-  const fetchConfig = useCallback(async (acctId: string) => {
-    setLoading(true);
-    try {
+  const fetchConfig = useCallback((acctId: string) => {
       // Load form values from Supabase (shows what's in DB).
       // Switched from `user_id` (which would only match the row's
       // original author) to `account_id` so every member of the
       // account sees the same saved configuration. UNIQUE(account_id)
       // on the table guarantees the .maybeSingle() return type
       // remains accurate.
-      const { data, error } = await supabase
-        .from('whatsapp_config')
-        .select('*')
-        .eq('account_id', acctId)
-        .maybeSingle();
-
-      if (error) {
-        console.error('Failed to load config row:', error);
+      async function readConfig() {
+        const { data, error } = await supabase
+          .from('whatsapp_config')
+          .select('*')
+          .eq('account_id', acctId)
+          .maybeSingle();
+        if (error) throw error;
+        return data;
       }
+      return readConfig().then(async (data) => {
 
       if (data) {
         setConfig(data);
@@ -218,12 +223,12 @@ export function WhatsAppConfig() {
         setStatusMeta(null);
         setWabaSubscription(null);
       }
-    } catch (err) {
+    }).catch((err: unknown) => {
       console.error('fetchConfig error:', err);
       toast.error(t('loadFailed'));
-    } finally {
+    }).finally(() => {
       setLoading(false);
-    }
+    });
   }, [supabase, t]);
 
   useEffect(() => {
@@ -235,13 +240,12 @@ export function WhatsAppConfig() {
     if (authLoading || profileLoading) return;
     if (!user || !accountId) {
       loadedAccountIdRef.current = null;
-      setLoading(false);
       return;
     }
     if (loadedAccountIdRef.current === accountId) return;
     loadedAccountIdRef.current = accountId;
     fetchConfig(accountId);
-  }, [authLoading, profileLoading, user?.id, accountId, fetchConfig]);
+  }, [authLoading, profileLoading, user, accountId, fetchConfig]);
 
   async function handleToggleMirrorMedia(next: boolean) {
     if (!config || !accountId || savingMirror) return;
@@ -379,7 +383,10 @@ export function WhatsAppConfig() {
         setPin('');
       }
 
-      if (accountId) await fetchConfig(accountId);
+      if (accountId) {
+        setLoading(true);
+        await fetchConfig(accountId);
+      }
     } catch (err) {
       console.error('Save error:', err);
       toast.error(t('saveFailed'));
@@ -439,7 +446,10 @@ export function WhatsAppConfig() {
           { duration: 8000 },
         );
       }
-      if (accountId) await fetchConfig(accountId);
+      if (accountId) {
+        setLoading(true);
+        await fetchConfig(accountId);
+      }
     } catch (err) {
       console.error('verify-registration failed:', err);
       toast.error(t('verifyEndpointUnreachable'));

@@ -354,9 +354,22 @@ function FlowCanvasInner() {
 
   const [rfNodes, setRfNodes] = useState<RfNode<NodeData>[]>(derivedRfNodes);
 
-  useEffect(() => {
-    setRfNodes(derivedRfNodes);
-  }, [derivedRfNodes]);
+  const [previousDerivedNodes, setPreviousDerivedNodes] = useState(derivedRfNodes);
+  if (previousDerivedNodes !== derivedRfNodes) {
+    setPreviousDerivedNodes(derivedRfNodes);
+    setRfNodes((current) => {
+      const byId = new Map(current.map((node) => [node.id, node]));
+      return derivedRfNodes.map((node) => {
+        const previous = byId.get(node.id);
+        return {
+          ...previous,
+          ...node,
+          // Context edits/validator flashes must not interrupt an active drag.
+          position: previous?.dragging ? previous.position : node.position,
+        };
+      });
+    });
+  }
 
   const rfEdges = useMemo(() => {
     const canvasEdges = deriveCanvasEdges(builderNodes);

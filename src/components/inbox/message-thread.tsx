@@ -192,6 +192,7 @@ export function MessageThread({
   const tQuote = useTranslations("Inbox.replyQuote");
 
   const { user } = useAuth();
+  const userId = user?.id;
   const { getPresence, getRow, now } = usePresence();
   const [loading, setLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -435,10 +436,7 @@ export function MessageThread({
   // refetches the rows without also tearing down and rebuilding the
   // realtime channel.
   useEffect(() => {
-    if (!conversationId) {
-      setReactions([]);
-      return;
-    }
+    if (!conversationId) return;
     const supabase = createClient();
     let cancelled = false;
 
@@ -533,11 +531,13 @@ export function MessageThread({
     };
   }, [conversationId]);
 
-  // Clear any in-progress reply draft when the active conversation changes —
-  // a quote pulled from conversation A shouldn't bleed into conversation B.
-  useEffect(() => {
+  // Reset only thread-local state, never remount the composer on realtime updates.
+  const [previousConversationId, setPreviousConversationId] = useState(conversationId);
+  if (previousConversationId !== conversationId) {
+    setPreviousConversationId(conversationId);
+    setReactions([]);
     setReplyTo(null);
-  }, [conversationId]);
+  }
 
   // Reset the server-side unread_count to 0 whenever an unread count
   // surfaces on the active conversation — covers both (a) opening a
@@ -884,7 +884,7 @@ export function MessageThread({
         preview: buildReplyPreview(msg, tQuote),
       });
     },
-    [authorLabelFor],
+    [authorLabelFor, tQuote],
   );
 
   // Single reaction-set primitive. emoji === "" removes; otherwise adds/swaps.
@@ -893,7 +893,7 @@ export function MessageThread({
   // function dependency-free w.r.t. the reaction list.
   const postReaction = useCallback(
     async (messageId: string, emoji: string) => {
-      if (!user?.id || !conversation) {
+      if (!userId || !conversation) {
         console.warn("[reactions] missing user or conversation");
         return;
       }
@@ -903,7 +903,6 @@ export function MessageThread({
       }
 
       const convId = conversation.id;
-      const userId = user.id;
       let snapshot: MessageReaction[] = [];
 
       // Functional updater — captures the freshest reactions list, never a
@@ -935,7 +934,7 @@ export function MessageThread({
         setReactions(snapshot);
       }
     },
-    [conversation, user?.id, t],
+    [conversation, userId, t],
   );
 
   const handleAssignChange = useCallback(

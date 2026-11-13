@@ -1,0 +1,4 @@
+# Dokploy routes to the internal app port; do not publish a host port.
+services:
+  app:
+    ports: !reset []

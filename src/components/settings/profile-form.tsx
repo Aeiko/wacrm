@@ -33,25 +33,25 @@ const ALLOWED_MIME = new Set([
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export function ProfileForm() {
+  const { user, accountId } = useAuth();
+  return <ProfileDraft key={`${user?.id ?? ''}:${accountId ?? ''}`} />;
+}
+
+function ProfileDraft() {
   const t = useTranslations('Settings.profile');
   const { user, profile, refreshProfile } = useAuth();
   const supabase = createClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const [fullName, setFullName] = useState('');
-  const [email, setEmail] = useState('');
+  const [nameDraft, setFullName] = useState<string | null>(null);
+  const [emailDraft, setEmail] = useState<string | null>(null);
+  const fullName = nameDraft ?? profile?.full_name ?? '';
+  const email = emailDraft ?? profile?.email ?? '';
   const [pendingAvatar, setPendingAvatar] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [removeAvatar, setRemoveAvatar] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [emailChangePending, setEmailChangePending] = useState(false);
-
-  // Seed form state once the profile loads.
-  useEffect(() => {
-    if (!profile) return;
-    setFullName(profile.full_name ?? '');
-    setEmail(profile.email ?? '');
-  }, [profile]);
+  const [emailChangePending, setEmailChangePending] = useState<string | null>(null);
 
   // Cleanup object URLs to avoid leaks.
   useEffect(() => {
@@ -168,16 +168,19 @@ export function ProfileForm() {
           toast.error(t('emailChangeFailed', { message: emailError.message }));
           setSaving(false);
           await refreshProfile();
+          setFullName((draft) => draft === nameDraft ? null : draft);
           return;
         }
         emailSent = true;
       }
 
-      setEmailChangePending(emailSent);
+      if (emailSent) setEmailChangePending(trimmedEmail);
       setPendingAvatar(null);
       setPreviewUrl(null);
       setRemoveAvatar(false);
       await refreshProfile();
+      setFullName((draft) => draft === nameDraft ? null : draft);
+      setEmail((draft) => draft === emailDraft ? null : draft);
 
       toast.success(
         emailSent
@@ -297,7 +300,7 @@ export function ProfileForm() {
                 <span>
                   {t.rich('emailChangeHint', { 
                     oldEmail: profile?.email || '', 
-                    newEmail: email,
+                    newEmail: emailChangePending,
                     bold: (chunks: React.ReactNode) => <strong>{chunks}</strong>
                   })}
                 </span>

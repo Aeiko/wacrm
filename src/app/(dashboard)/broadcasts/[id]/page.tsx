@@ -149,10 +149,13 @@ function downloadBlob(filename: string, content: string) {
 
 export default function BroadcastDetailPage() {
   const params = useParams();
+  return <BroadcastDetail key={params.id as string} broadcastId={params.id as string} />;
+}
+
+function BroadcastDetail({ broadcastId }: { broadcastId: string }) {
   const router = useRouter();
   const t = useTranslations('Broadcasts.detail');
   const tStatus = useTranslations('Broadcasts.status');
-  const broadcastId = params.id as string;
 
   const [broadcast, setBroadcast] = useState<Broadcast | null>(null);
   const [recipients, setRecipients] = useState<BroadcastRecipient[]>([]);
@@ -168,39 +171,45 @@ export default function BroadcastDetailPage() {
     'pending' | 'failed' | null
   >(null);
 
-  const fetchData = useCallback(async () => {
-    try {
-      const supabase = createClient();
-
-      const { data: bc, error: bcError } = await supabase
-        .from('broadcasts')
-        .select('*')
-        .eq('id', broadcastId)
-        .single();
-
-      if (bcError) throw bcError;
-      setBroadcast(bc);
-      setDeliveryInFlight(await isBroadcastDeliveryInFlight(supabase, broadcastId));
-
-      const recs = await fetchAllPages<BroadcastRecipient>((from, to) =>
-        supabase
-          .from('broadcast_recipients')
-          .select('*, contact:contacts(*)')
-          .eq('broadcast_id', broadcastId)
-          .order('created_at', { ascending: false })
-          .order('id')
-          .range(from, to),
-      );
-      setRecipients(recs);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t('notFound'));
-    } finally {
-      setLoading(false);
-    }
+  const fetchData = useCallback((signal?: AbortSignal) => {
+    const supabase = createClient();
+    return Promise.resolve(supabase
+      .from('broadcasts')
+      .select('*')
+      .eq('id', broadcastId)
+      .single())
+      .then(async ({ data: bc, error: bcError }) => {
+        if (signal?.aborted) return;
+        if (bcError) throw bcError;
+        const inFlight = await isBroadcastDeliveryInFlight(supabase, broadcastId);
+        const recs = await fetchAllPages<BroadcastRecipient>((from, to) =>
+          supabase
+            .from('broadcast_recipients')
+            .select('*, contact:contacts(*)')
+            .eq('broadcast_id', broadcastId)
+            .order('created_at', { ascending: false })
+            .order('id')
+            .range(from, to),
+        );
+        if (signal?.aborted) return;
+        setBroadcast(bc);
+        setDeliveryInFlight(inFlight);
+        setRecipients(recs);
+      })
+      .catch((err: unknown) => {
+        if (!signal?.aborted) {
+          setError(err instanceof Error ? err.message : t('notFound'));
+        }
+      })
+      .finally(() => {
+        if (!signal?.aborted) setLoading(false);
+      });
   }, [broadcastId, t]);
 
   useEffect(() => {
-    fetchData();
+    const controller = new AbortController();
+    fetchData(controller.signal);
+    return () => controller.abort();
   }, [fetchData]);
 
   const filteredRecipients = useMemo(
