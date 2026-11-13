@@ -27,6 +27,8 @@ endings, including on Windows.
   backend. The app uses PostgREST's existing connection pool.
 - Adds Mailpit `v1.27.10` only under the `local` profile for development
   confirmation/password-reset email capture.
+- Replaces credential-shaped, commented hook examples with descriptive
+  placeholders so GitHub secret scanning does not flag public example text.
 
 The app retains its existing HS256 JWT authentication integration. Setup
 creates unique random secrets and matching anon/service-role JWTs; the

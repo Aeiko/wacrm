@@ -20,6 +20,12 @@ function workspace(t) {
   return root;
 }
 
+test('deployment templates do not contain credential-shaped webhook examples', () => {
+  const compose = readFileSync(new URL('../deploy/supabase/docker-compose.yml', import.meta.url), 'utf8');
+  assert.equal(/\bwhsec_[A-Za-z0-9+/=_-]{16,}/.test(compose), false,
+    'Credential-shaped webhook example detected in deployment template');
+});
+
 test('generates matching app/backend credentials and signed role keys', (t) => {
   const root = workspace(t);
   initialize(root);
