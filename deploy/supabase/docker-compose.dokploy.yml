@@ -1,0 +1,57 @@
+# Use with --project-directory . from Dokploy's repository checkout (code/).
+# File Mounts live in the sibling files/ directory; merge by container target.
+services:
+  api-gw:
+    volumes:
+      - ../files/supabase/api/envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro
+      - ../files/supabase/api/envoy/cds.yaml:/etc/envoy/cds.yaml:ro
+      - ../files/supabase/api/envoy/lds.template.yaml:/etc/envoy/lds.template.yaml:ro
+      - ../files/supabase/api/envoy/docker-entrypoint.sh:/docker-entrypoint.sh:ro
+  db:
+    volumes:
+      - ../files/supabase/db/realtime.sql:/docker-entrypoint-initdb.d/migrations/99-realtime.sql:Z
+      - ../files/supabase/db/webhooks.sql:/docker-entrypoint-initdb.d/init-scripts/98-webhooks.sql:Z
+      - ../files/supabase/db/roles.sql:/docker-entrypoint-initdb.d/init-scripts/99-roles.sql:Z
+      - ../files/supabase/db/jwt.sql:/docker-entrypoint-initdb.d/init-scripts/99-jwt.sql:Z
+      - ../files/supabase/db/_supabase.sql:/docker-entrypoint-initdb.d/migrations/97-_supabase.sql:Z
+      - ../files/supabase/db/logs.sql:/docker-entrypoint-initdb.d/migrations/99-logs.sql:Z
+      - ../files/supabase/db/pooler.sql:/docker-entrypoint-initdb.d/migrations/99-pooler.sql:Z
+
+  migrate:
+    image: node:22-alpine
+    profiles: ['maintenance']
+    restart: 'no'
+    depends_on:
+      db:
+        condition: service_healthy
+    working_dir: /workspace
+    volumes:
+      - .:/workspace:ro
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      npm_config_ignore_scripts: 'true'
+    command:
+      - npx
+      - --yes
+      - --package=supabase@2.113.0
+      - supabase
+      - db
+      - push
+      - --db-url
+      - postgresql://postgres@db:5432/postgres?sslmode=disable
+      - --yes
+
+  verify:
+    image: supabase/postgres:17.6.1.136
+    profiles: ['maintenance']
+    restart: 'no'
+    depends_on:
+      db:
+        condition: service_healthy
+    working_dir: /workspace
+    volumes:
+      - .:/workspace:ro
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    entrypoint: ['psql']
+    command: ['-X', '-w', '-h', 'db', '-p', '5432', '-U', 'postgres', '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-f', 'supabase/ci/verify-schema.sql']

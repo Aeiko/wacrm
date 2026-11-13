@@ -55,6 +55,7 @@ jobs:
       - name: Self-host setup tests and Compose validation
         run: |
           npm run test:selfhost
+          node --test scripts/dokploy-compose.test.mjs
           docker compose --env-file deploy/supabase/.env.example -f deploy/supabase/docker-compose.yml config --quiet
 
       - name: Build

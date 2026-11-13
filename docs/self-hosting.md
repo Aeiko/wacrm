@@ -67,7 +67,9 @@ Keep an encrypted backup of that pair.
 
 ### 1. Supabase project
 
-- Source this repository; Compose path: `deploy/supabase/docker-compose.yml`.
+- Source this repository; Compose path: `deploy/supabase/docker-compose.yml`,
+  with the tracked `deploy/supabase/docker-compose.dokploy.yml` overlay and
+  Advanced → Command below. Keep the existing Compose project name.
 - Copy the contents of the independently generated `deploy/supabase/.env`
   into this project's Dokploy **Environment** field. Dokploy writes `.env`
   beside the Compose file; `${...}` references inject the required values.
@@ -126,36 +128,40 @@ The last two SQL files remain official database bootstrap inputs even
 though logging/pooler services are not included. Keep `${...}` placeholders
 in gateway templates literal; do not paste credentials into these files.
 
-Create one more File Mount with File Path `supabase-mounts.yml` and this
-content. Compose merges volumes by **container target**, so these entries
-replace the eleven checkout sources while retaining all named data volumes:
+These are the only **11 File Mounts** required. The tracked
+[`deploy/supabase/docker-compose.dokploy.yml`](../deploy/supabase/docker-compose.dokploy.yml)
+replaces their sources by **container target**, preserving named data
+volumes and the default network. Do not create an extra overlay File Mount.
+If upgrading from the old manual `supabase-mounts.yml` recipe, stop
+referencing that file and use the tracked overlay instead.
 
-```yaml
-services:
-  api-gw:
-    volumes:
-      - ../files/supabase/api/envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro
-      - ../files/supabase/api/envoy/cds.yaml:/etc/envoy/cds.yaml:ro
-      - ../files/supabase/api/envoy/lds.template.yaml:/etc/envoy/lds.template.yaml:ro
-      - ../files/supabase/api/envoy/docker-entrypoint.sh:/docker-entrypoint.sh:ro
-  db:
-    volumes:
-      - ../files/supabase/db/realtime.sql:/docker-entrypoint-initdb.d/migrations/99-realtime.sql:Z
-      - ../files/supabase/db/webhooks.sql:/docker-entrypoint-initdb.d/init-scripts/98-webhooks.sql:Z
-      - ../files/supabase/db/roles.sql:/docker-entrypoint-initdb.d/init-scripts/99-roles.sql:Z
-      - ../files/supabase/db/jwt.sql:/docker-entrypoint-initdb.d/init-scripts/99-jwt.sql:Z
-      - ../files/supabase/db/_supabase.sql:/docker-entrypoint-initdb.d/migrations/97-_supabase.sql:Z
-      - ../files/supabase/db/logs.sql:/docker-entrypoint-initdb.d/migrations/99-logs.sql:Z
-      - ../files/supabase/db/pooler.sql:/docker-entrypoint-initdb.d/migrations/99-pooler.sql:Z
-```
-
-Use this backend Advanced → Command, replacing `YOUR_BACKEND_PROJECT` with
-Dokploy's existing project name and retaining any other required deployment
-options from its default command:
+Use this backend Advanced → Command as a **single line**, replacing every
+`YOUR_BACKEND_PROJECT` with Dokploy's existing project name. Dokploy prefixes
+`docker` to the first command; subsequent commands must start with
+`docker compose`:
 
 ```text
-compose -p YOUR_BACKEND_PROJECT --project-directory . --env-file deploy/supabase/.env -f deploy/supabase/docker-compose.yml -f ../files/supabase-mounts.yml up -d --build --remove-orphans
+compose -p YOUR_BACKEND_PROJECT --project-directory . --env-file deploy/supabase/.env -f deploy/supabase/docker-compose.yml -f deploy/supabase/docker-compose.dokploy.yml up -d --wait --wait-timeout 240 && docker compose -p YOUR_BACKEND_PROJECT --project-directory . --env-file deploy/supabase/.env -f deploy/supabase/docker-compose.yml -f deploy/supabase/docker-compose.dokploy.yml run --rm migrate && docker compose -p YOUR_BACKEND_PROJECT --project-directory . --env-file deploy/supabase/.env -f deploy/supabase/docker-compose.yml -f deploy/supabase/docker-compose.dokploy.yml run --rm verify
 ```
+
+The `maintenance` profile keeps `migrate` and `verify` out of ordinary
+`up`; explicitly targeting them with `run` activates each job without a
+profile flag. Do not enable `maintenance` globally or combine both jobs in
+`up`. The chain waits for backend health, applies pending tracked migrations
+with Supabase CLI **2.113.0** (`db push --yes`), then runs
+`supabase/ci/verify-schema.sql` using the same pinned Postgres image as `db`.
+A failure stops the chain and fails deployment; already-running backend
+services are not rolled back. Re-running uses the CLI's migration history,
+not a bespoke tracker or blind SQL replay.
+
+Both jobs mount the checkout read-only at `/workspace` and connect to
+`db:5432` as `postgres`, with `PGPASSWORD` supplied from the backend
+Environment field, never embedded in their URL/command arguments. They
+publish no ports and need no host SSH. The migration job uses
+`node:22-alpine` and `npx`; outbound npm access is required on every fresh
+one-off container. Lifecycle scripts stay disabled (also matching the root
+`.npmrc`); CLI 2.113.0 supplies platform-specific optional binaries and was
+checked with an isolated `--version` command on Alpine.
 
 Dokploy runs from the checkout's `code/` directory. Explicitly setting
 `--project-directory .` anchors all relative volume sources there, making
@@ -167,13 +173,18 @@ Without this explicit project directory, normal Compose resolution from
 the two layouts or rely on version-dependent automatic directory flags.
 
 This recipe was checked against Dokploy
-[v0.31.2's command builder](https://github.com/Dokploy/dokploy/blob/v0.31.2/packages/server/src/utils/builders/compose.ts)
-and Docker's [volume merge rules](https://docs.docker.com/reference/compose-file/merge/#unique-resources).
-A local Compose config check confirmed all eleven bind replacements and
-retained `db-data`/`db-config`; no live production deployment was tested.
-Before starting, inspect the final merged
-configuration with the same flags and `config --no-interpolate` instead of
-`up ...`; do not print a fully interpolated config containing secrets.
+[v0.30.5's command builder](https://github.com/Dokploy/dokploy/blob/v0.30.5/packages/server/src/utils/builders/compose.ts)
+(including its restricted `&& docker compose ...` chaining), Docker's
+[volume merge rules](https://docs.docker.com/reference/compose-file/merge/#unique-resources),
+and Supabase's [`db push` reference](https://supabase.com/docs/reference/cli/supabase-db-push).
+Run `node --test scripts/dokploy-compose.test.mjs` locally with Docker Compose
+installed to check all eleven bind replacements, named volumes, networks,
+loopback ports, and maintenance job configuration without loading secrets.
+No live production deployment or database changes were tested.
+Before starting, inspect the final merged configuration with the first
+command's flags and `config --no-interpolate` instead of `up ...` (omit
+both `&& ...` job commands); do not print a fully interpolated config
+containing secrets.
 Confirm every config source resolves under the project's `files/`, all
 named data volumes remain present, and domain labels/networks are retained.
 Update File Mount contents deliberately when upgrading the pinned backend,
@@ -257,15 +268,30 @@ only from `deploy/supabase/.env`. With this CLI's explicit `--db-url`,
 `SUPABASE_DB_PASSWORD` alone is ignored; the script also passes
 `PGPASSWORD`, keeping the password out of the URL/command arguments.
 
-For production, run the dry-run and migration commands on a protected
-server checkout containing the **same production backend credentials**.
-They do not target a cloud project or discover Dokploy services. If running
-from an operator machine, first establish an SSH tunnel such as
-`ssh -N -L 54322:127.0.0.1:54322 user@server` and use a local checkout with
-the matching backend env; stop any local stack occupying that port. Confirm
-the target before applying. Schema verification uses Docker Compose exec,
-so run it against the server's actual Dokploy project (see the `c` helper
-below), not the operator's local stack.
+For Dokploy production, the deployment chain above runs migration and
+verification jobs inside the backend network, including on a fresh database.
+No server checkout setup or SSH tunnel is needed for that path. For a
+review-only dry-run, use Dokploy's command runner with the same project,
+project-directory, env-file, and both Compose files, replacing the deployment
+chain's `up ...` and subsequent jobs with:
+
+```text
+run --rm migrate npx --yes --package=supabase@2.113.0 supabase db push --db-url postgresql://postgres@db:5432/postgres?sslmode=disable --yes --dry-run
+```
+
+Compose `run` replaces (rather than appends to) the job command, so the full
+command is required for a dry-run. Back up and review pending migrations
+before deploying an upgrade; the deployment chain itself applies them
+noninteractively.
+
+The local npm helpers do not discover Dokploy services or target a cloud
+project. If using them from an operator machine instead, establish an SSH
+tunnel such as `ssh -N -L 54322:127.0.0.1:54322 user@server`, use a protected
+checkout with the matching production backend env, and stop any local stack
+occupying that port. Confirm the target before applying. The npm schema
+verification helper uses Docker Compose exec, so it only works on the
+Docker server against the actual project (see the `c` helper below), not
+over the database tunnel.
 
 Back up before migrations or image updates. Review the dry-run, apply
 migrations, then run `supabase/ci/verify-schema.sql` and smoke-test the app.
