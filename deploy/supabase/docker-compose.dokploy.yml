@@ -2,12 +2,14 @@
 # File Mounts live in the sibling files/ directory; merge by container target.
 services:
   api-gw:
+    ports: !reset []
     volumes:
       - ../files/supabase/api/envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro
       - ../files/supabase/api/envoy/cds.yaml:/etc/envoy/cds.yaml:ro
       - ../files/supabase/api/envoy/lds.template.yaml:/etc/envoy/lds.template.yaml:ro
       - ../files/supabase/api/envoy/docker-entrypoint.sh:/docker-entrypoint.sh:ro
   db:
+    ports: !reset []
     volumes:
       - ../files/supabase/db/realtime.sql:/docker-entrypoint-initdb.d/migrations/99-realtime.sql:Z
       - ../files/supabase/db/webhooks.sql:/docker-entrypoint-initdb.d/init-scripts/98-webhooks.sql:Z

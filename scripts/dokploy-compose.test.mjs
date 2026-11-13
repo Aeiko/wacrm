@@ -29,7 +29,11 @@ test('Dokploy overlay preserves data/network and isolates maintenance jobs', (t)
   for (const [name, service] of Object.entries(base.services)) {
     const actual = merged.services[name];
     assert.deepEqual(actual.networks, service.networks);
-    assert.deepEqual(actual.ports, service.ports);
+    if (name === 'api-gw' || name === 'db') {
+      assert.ok(!actual.ports?.length, `${name} must not publish production host ports`);
+    } else {
+      assert.deepEqual(actual.ports, service.ports);
+    }
     assert.deepEqual(actual.profiles, service.profiles);
     assert.equal(actual.volumes?.length, service.volumes?.length);
     for (const volume of service.volumes ?? []) {

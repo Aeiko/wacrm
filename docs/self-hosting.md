@@ -131,7 +131,9 @@ in gateway templates literal; do not paste credentials into these files.
 These are the only **11 File Mounts** required. The tracked
 [`deploy/supabase/docker-compose.dokploy.yml`](../deploy/supabase/docker-compose.dokploy.yml)
 replaces their sources by **container target**, preserving named data
-volumes and the default network. Do not create an extra overlay File Mount.
+volumes and the default network. It also removes API/database host-port
+publishing with `!reset` (Compose v2.24.4+), avoiding shared-server port
+conflicts. Do not create an extra overlay File Mount.
 If upgrading from the old manual `supabase-mounts.yml` recipe, stop
 referencing that file and use the tracked overlay instead.
 
@@ -179,7 +181,7 @@ This recipe was checked against Dokploy
 and Supabase's [`db push` reference](https://supabase.com/docs/reference/cli/supabase-db-push).
 Run `node --test scripts/dokploy-compose.test.mjs` locally with Docker Compose
 installed to check all eleven bind replacements, named volumes, networks,
-loopback ports, and maintenance job configuration without loading secrets.
+private API/database ports, and maintenance job configuration without loading secrets.
 No live production deployment or database changes were tested.
 Before starting, inspect the final merged configuration with the first
 command's flags and `config --no-interpolate` instead of `up ...` (omit
@@ -246,9 +248,10 @@ verification after deploying.
   management paths at the reverse proxy; do not globally block the Auth,
   REST, Storage, or Realtime paths used by the app. Review gateway routes
   before making an allowlist; do not expose management APIs unnecessarily.
-- Postgres is published on loopback `127.0.0.1:54322` for migrations only.
-  Do not publish it publicly. API port 8000 is also loopback-bound on the
-  host; the HTTPS proxy reaches the container's internal port.
+- The production overlay publishes **no PostgreSQL or API host ports**.
+  The HTTPS proxy reaches the gateway on its Docker network; migration
+  jobs connect to `db:5432` internally. The base/local configuration's
+  loopback ports 54322 and 8000 remain available only for local development.
 - Nothing schedules jobs inside the app container. Set a strong
   `AUTOMATION_CRON_SECRET` and externally schedule
   `GET /api/automations/cron` and `GET /api/flows/cron` with header
@@ -285,13 +288,11 @@ before deploying an upgrade; the deployment chain itself applies them
 noninteractively.
 
 The local npm helpers do not discover Dokploy services or target a cloud
-project. If using them from an operator machine instead, establish an SSH
-tunnel such as `ssh -N -L 54322:127.0.0.1:54322 user@server`, use a protected
-checkout with the matching production backend env, and stop any local stack
-occupying that port. Confirm the target before applying. The npm schema
+project. They cannot connect directly to this production stack because
+its database has no host port. Use the maintenance jobs for production;
+do not expose PostgreSQL publicly just to run a migration. The npm schema
 verification helper uses Docker Compose exec, so it only works on the
-Docker server against the actual project (see the `c` helper below), not
-over the database tunnel.
+Docker server against the actual project (see the `c` helper below).
 
 Back up before migrations or image updates. Review the dry-run, apply
 migrations, then run `supabase/ci/verify-schema.sql` and smoke-test the app.
