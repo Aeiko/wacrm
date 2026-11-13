@@ -1,5 +1,11 @@
 # Use with --project-directory . from Dokploy's repository checkout (code/).
 # File Mounts live in the sibling files/ directory; merge by container target.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${SUPABASE_NETWORK_SUBNET:?Set a dedicated unused production subnet}
+
 services:
   api-gw:
     ports: !reset []

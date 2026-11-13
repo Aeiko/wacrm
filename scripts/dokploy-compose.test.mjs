@@ -24,7 +24,13 @@ test('Dokploy overlay preserves data/network and isolates maintenance jobs', (t)
   const base = config();
   const merged = config(true);
   assert.deepEqual(merged.volumes, base.volumes);
-  assert.deepEqual(merged.networks, base.networks);
+  assert.deepEqual(merged.networks, {
+    ...base.networks,
+    default: {
+      ...base.networks.default,
+      ipam: { config: [{ subnet: '${SUPABASE_NETWORK_SUBNET:?Set a dedicated unused production subnet}' }] },
+    },
+  });
   let binds = 0;
   for (const [name, service] of Object.entries(base.services)) {
     const actual = merged.services[name];
@@ -79,4 +85,13 @@ test('Dokploy overlay preserves data/network and isolates maintenance jobs', (t)
   assert.deepEqual(merged.services.verify.command, ['-X', '-w', '-h', 'db', '-p',
     '5432', '-U', 'postgres', '-d', 'postgres', '-v', 'ON_ERROR_STOP=1',
     '-f', 'supabase/ci/verify-schema.sql']);
+
+  const app = JSON.parse(execFileSync('docker', ['compose', '--env-file', envFile,
+    '-f', 'docker-compose.yml', '-f', 'docker-compose.dokploy.yml',
+    'config', '--no-interpolate', '--no-env-resolution', '--format', 'json'],
+  { cwd: root, encoding: 'utf8' }));
+  assert.deepEqual(Object.keys(app.services.app.networks), ['dokploy-network']);
+  assert.deepEqual(Object.keys(app.networks), ['dokploy-network']);
+  assert.equal(app.networks['dokploy-network'].external, true);
+  assert.ok(!app.services.app.ports?.length);
 });

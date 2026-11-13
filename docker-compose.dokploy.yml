@@ -1,4 +1,10 @@
-# Dokploy routes to the internal app port; do not publish a host port.
+# This single-service app only needs Dokploy's existing proxy network.
 services:
   app:
     ports: !reset []
+    networks: !override
+      - dokploy-network
+
+networks:
+  dokploy-network:
+    external: true

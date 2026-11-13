@@ -91,6 +91,11 @@ Keep an encrypted backup of that pair.
   `SMTP_SENDER_NAME` for your provider; `mail` is local-only. Keep email
   confirmation enabled and decide whether public signup should be disabled
   (`DISABLE_SIGNUP`). See [auth emails](auth-emails.md).
+- Set `SUPABASE_NETWORK_SUBNET` to a dedicated unused private CIDR, for
+  example `10.250.220.0/24` **only after checking existing Docker, host,
+  VPC and VPN routes**. The overlay requires this value instead of relying
+  on automatic Docker address pools, which can be exhausted on shared
+  servers. Do not prune unrelated networks or restart Docker to make room.
 
 - Route the API hostname over HTTPS to service `api-gw`, internal port
   **8000**, preserving request paths and WebSocket upgrades. Do not strip
@@ -201,8 +206,10 @@ Edge Runtime. Database and Storage data also remain in named volumes.
 
 - Source the repository root, using `docker-compose.yml` plus
   `docker-compose.dokploy.yml`. The override removes the published host
-  port; Dokploy routes directly to service `app`, internal port **3000**.
-  Compose must support `!reset` (v2.24.4+).
+  port and uses only the existing external `dokploy-network`; this
+  single-service app does not need another private subnet. Dokploy routes
+  directly to service `app`, internal port **3000**. Compose must support
+  `!reset` and `!override` (v2.24.4+).
 - Copy the generated root `.env.local` contents into the app project's
   **Environment** field and add `APP_ENV_FILE=.env`. Dokploy writes `.env`,
   while the root Compose defaults to `.env.local`; this setting bridges
