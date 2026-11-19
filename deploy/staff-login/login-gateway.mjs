@@ -75,7 +75,8 @@ const server=createServer({key:readFileSync(`${dir}/gateway/key.pem`),cert:readF
     if(!(token&&grant||user||logout||rest))return end(res,404);
     if(m==='OPTIONS'){
       const wanted=(req.headers['access-control-request-headers']??'').toLowerCase().split(',').map(x=>x.trim()).filter(Boolean);
-      if(req.headers.origin!==origin||wanted.some(x=>!headers.has(x)))return end(res,403);
+      // PostgREST's SDK adds this marker on read retries; the gateway does not forward it.
+      if(req.headers.origin!==origin||wanted.some(x=>!headers.has(x)&&!(rest&&get==='GET'&&x==='x-retry-count')))return end(res,403);
       res.setHeader('Vary','Origin, Access-Control-Request-Method, Access-Control-Request-Headers');
       res.setHeader('Access-Control-Allow-Methods',get);res.setHeader('Access-Control-Allow-Headers',wanted.join(', '));return end(res,204);
     }
