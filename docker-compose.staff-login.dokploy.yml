@@ -11,7 +11,11 @@ services:
     restart: 'no'
     mem_limit: 512m
     pids_limit: 128
-    networks: [login-front]
+    networks:
+      login-front:
+        ipv4_address: ${LOGIN_CRM_IP:-192.0.2.10}
+    extra_hosts:
+      - '${LOGIN_API_HOST:-supabase.fixture.invalid}=${LOGIN_PROXY_IP:-127.0.0.1}'
     volumes:
       - type: bind
         source: ${LOGIN_INPUT_DIR:-../files/staff-login}/anon
@@ -40,20 +44,19 @@ services:
     user: '1000:1000'
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
-    sysctls: {net.ipv4.ip_unprivileged_port_start: '0'}
     read_only: true
     logging: {driver: none}
     restart: 'no'
     mem_limit: 128m
     pids_limit: 64
-    expose: ['443']
+    expose: ['8080']
     environment:
       LOGIN_GATEWAY_MODE: ${LOGIN_GATEWAY_MODE:-disabled}
       LOGIN_API_HOST: ${LOGIN_API_HOST:-supabase.fixture.invalid}
       LOGIN_CRM_HOST: ${LOGIN_CRM_HOST:-crm.fixture.invalid}
     networks:
       login-front:
-        aliases: ['${LOGIN_API_HOST:-supabase.fixture.invalid}']
+        ipv4_address: ${LOGIN_GATEWAY_IP:-192.0.2.11}
       login-upstream: {}
     volumes:
       - type: bind
@@ -64,7 +67,8 @@ services:
 
 networks:
   login-front:
-    internal: true
+    external: true
+    name: ${LOGIN_FRONT_NETWORK:-staff-login-front-unconfigured}
   login-upstream:
     external: true
     name: ${LOGIN_UPSTREAM_NETWORK:-staff-login-upstream-unconfigured}

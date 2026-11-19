@@ -1,0 +1,16 @@
+# Apply only in the fresh, verified login-gateway network namespace.
+table inet wacrm_login {
+  chain input {
+    type filter hook input priority -150; policy drop;
+    ct state established accept
+    ip saddr @PROXY@ ip daddr @GATEWAY@ tcp dport 8080 ct state new accept
+  }
+  chain output {
+    type filter hook output priority -150; policy drop;
+    ct state established accept
+    ip daddr @AUTH@ tcp dport @AUTHPORT@ ct state new accept
+    ip daddr @REST@ tcp dport @RESTPORT@ ct state new accept
+    ip daddr @CRM@ tcp dport 3000 ct state new accept
+    counter drop
+  }
+}

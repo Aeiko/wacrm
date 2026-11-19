@@ -1,13 +1,12 @@
-import { createServer } from 'node:https';
-import { request } from 'node:http';
+import { createServer, request } from 'node:http';
 import { isIPv4 } from 'node:net';
 import { readFileSync } from 'node:fs';
 
 const mode=process.env.LOGIN_GATEWAY_MODE;
-if(!['private-fixture-v1','private-staging-v1'].includes(mode)) process.exit(78);
-const fixture=mode==='private-fixture-v1';
+if(!['private-http-fixture-v1','private-http-staging-v1'].includes(mode)) process.exit(78);
+const fixture=mode==='private-http-fixture-v1';
 const dir='/run/staff-login';
-const {owner,auth,rest}=JSON.parse(readFileSync(`${dir}/gateway/upstreams.json`,'utf8'));
+const {owner,auth,rest,proxy,listen,crmIP}=JSON.parse(readFileSync(`${dir}/gateway/upstreams.json`,'utf8'));
 const {LOGIN_API_HOST:api,LOGIN_CRM_HOST:crm}=process.env;
 const hostName=/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 if(!hostName.test(api)||!hostName.test(crm)||api===crm||(fixture?![api,crm].every(h=>h.endsWith('.fixture.invalid')):api!=='wacrm-api-staging.sqkii.land'||crm!=='wacrm-staging.sqkii.land')) throw Error('exact trial origins required');
@@ -16,8 +15,8 @@ const anon=readFileSync(`${dir}/anon`,'utf8').trim();
 const anonClaims=()=>JSON.parse(Buffer.from(anon.split('.')[1],'base64url'));
 if(fixture?anon!=='synthetic-anon-key-not-a-credential':anon.length>2048||anonClaims().role!=='anon') throw Error('public anon token required');
 const privateHost=host=>isIPv4(host)&&/^(?:10\.|172\.(?:1[6-9]|2\d|3[01])\.|192\.168\.)/.test(host);
-if(!privateHost(auth)||!privateHost(rest)) throw Error('literal private IPv4 endpoints required');
-const upstreams={auth:{host:auth,port:fixture?19999:9999},rest:{host:rest,port:fixture?3101:3000},crm:{host:'crm',port:3000}};
+if(![auth,rest,proxy,listen,crmIP].every(privateHost)||new Set([proxy,listen,crmIP]).size!==3||[auth,rest].some(x=>[proxy,listen,crmIP].includes(x))) throw Error('exact private IPv4 endpoints required');
+const upstreams={auth:{host:auth,port:fixture?19999:9999},rest:{host:rest,port:fixture?3101:3000},crm:{host:crmIP,port:3000}};
 const origin='https://'+crm;
 const headers=new Set('apikey authorization content-type x-client-info x-supabase-api-version accept-profile content-profile prefer range range-unit'.split(' '));
 const tables=new Set('profiles accounts messages contacts deals broadcasts automation_logs conversations message_reactions'.split(' '));
@@ -51,11 +50,13 @@ function pass(req,res,{host,port},path,keys,body){
   upstream.on('timeout',()=>upstream.destroy());upstream.on('error',()=>res.headersSent?res.destroy():end(res,502));
   res.on('close',()=>upstream.destroy());upstream.end(body);
 }
-const server=createServer({key:readFileSync(`${dir}/gateway/key.pem`),cert:readFileSync(`${dir}/ca.pem`),maxHeaderSize:16_384,requestTimeout:8000,headersTimeout:5000,connectionsCheckingInterval:1000},async(req,res)=>{
+const server=createServer({maxHeaderSize:16_384,requestTimeout:8000,headersTimeout:5000,connectionsCheckingInterval:1000},async(req,res)=>{
   try {
     res.setHeader('Cache-Control','no-store');
     const host=req.headers.host,m=req.method,raw=req.url;
-    if(!raw||raw.length>8192||req.socket.servername!==host||![api,crm].includes(host))return end(res,400);
+    // Only the designated TLS proxy may use the plaintext listener; forwarded headers are not identity.
+    if(req.socket.remoteAddress!==proxy)return end(res,403);
+    if(!raw||raw.length>8192||req.headersDistinct.host?.length!==1||![api,crm].includes(host))return end(res,400);
     const [path,query]=raw.split('?',2);
     if(!/^\/[A-Za-z0-9_./-]*$/.test(path)||path.includes('//')||path.split('/').some(x=>x==='.'||x==='..'))return end(res,404);
     if(host===crm){
@@ -90,4 +91,4 @@ const server=createServer({key:readFileSync(`${dir}/gateway/key.pem`),cert:readF
     return pass(req,res,auth?upstreams.auth:upstreams.rest,raw.slice(8),headers,body);
   }catch{if(!res.headersSent)end(res,400);else res.destroy();}
 });
-server.maxConnections=48;server.on('checkContinue',(_q,r)=>end(r,417));server.on('upgrade',(_q,s)=>s.destroy());server.listen(443,'0.0.0.0');
+server.maxConnections=48;server.on('checkContinue',(_q,r)=>end(r,417));server.on('upgrade',(_q,s)=>s.destroy());server.listen(8080,listen);

@@ -30,12 +30,16 @@ test('two services are discoverable without a profile; no hidden extras', (t) =>
   const c = JSON.parse(config([], '--format', 'json'));
   assert.deepEqual(Object.keys(c.services.crm.networks), ['login-front']);
   assert.deepEqual(Object.keys(c.services['login-gateway'].networks).sort(), ['login-front', 'login-upstream']);
-  assert.equal(c.networks['login-front'].internal, true);
+  assert.equal(c.networks['login-front'].external, true);
+  assert.equal(c.networks['login-front'].name, 'staff-login-front-unconfigured');
+  assert.deepEqual(c.services.crm.extra_hosts, ['supabase.fixture.invalid=127.0.0.1']);
   assert.equal(c.networks['login-upstream'].external, true);
   assert.equal(c.networks['login-upstream'].name, 'staff-login-upstream-unconfigured');
   const gateway = c.services['login-gateway'];
-  assert.deepEqual(gateway.networks['login-front'].aliases, ['supabase.fixture.invalid']);
-  assert.deepEqual(gateway.expose.map(String), ['443']);
+  assert.equal(gateway.networks['login-front'].ipv4_address, '192.0.2.11');
+  assert.equal(c.services.crm.networks['login-front'].ipv4_address, '192.0.2.10');
+  assert.equal(gateway.sysctls, undefined);
+  assert.deepEqual(gateway.expose.map(String), ['8080']);
   assert.deepEqual(gateway.environment, { LOGIN_API_HOST:'supabase.fixture.invalid', LOGIN_CRM_HOST:'crm.fixture.invalid', LOGIN_GATEWAY_MODE:'disabled' });
   for (const s of Object.values(c.services)) {
     assert.ok(!s.ports && !s.labels && !s.privileged && !s.profiles && !s.network_mode);
