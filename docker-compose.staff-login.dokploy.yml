@@ -1,0 +1,70 @@
+# Alternate Compose Path for the existing staging project. Private validation only.
+services:
+  crm:
+    image: ${LOGIN_CRM_IMAGE:-staff-login-crm-unconfigured:local}
+    pull_policy: never
+    user: nextjs
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    logging: {driver: none}
+    restart: 'no'
+    mem_limit: 512m
+    pids_limit: 128
+    networks: [login-front]
+    volumes:
+      - type: bind
+        source: ${LOGIN_INPUT_DIR:-../files/staff-login}/anon
+        target: /run/login-anon
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${LOGIN_INPUT_DIR:-../files/staff-login}/ca.pem
+        target: /run/login-ca.pem
+        read_only: true
+        bind: {create_host_path: false}
+    environment:
+      HOSTNAME: 0.0.0.0
+      NEXT_PUBLIC_SUPABASE_URL: https://${LOGIN_API_HOST:-supabase.fixture.invalid}
+      NEXT_PUBLIC_SITE_URL: https://${LOGIN_CRM_HOST:-crm.fixture.invalid}
+      NODE_EXTRA_CA_CERTS: /run/login-ca.pem
+      WHATSAPP_COEXISTENCE_ENABLED: 'false'
+      WHATSAPP_COEXISTENCE_IMPORT_SETTINGS_ENABLED: 'false'
+      WHATSAPP_COEXISTENCE_HISTORY_REQUEST_ENABLED: 'false'
+    entrypoint: [/bin/sh, -ec]
+    command: ['export NEXT_PUBLIC_SUPABASE_ANON_KEY="$$(cat /run/login-anon)"; test -n "$$NEXT_PUBLIC_SUPABASE_ANON_KEY"; exec node server.js']
+
+  login-gateway:
+    image: ${LOGIN_GATEWAY_IMAGE:-staff-login-gateway-unconfigured:local}
+    pull_policy: never
+    user: '1000:1000'
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    sysctls: {net.ipv4.ip_unprivileged_port_start: '0'}
+    read_only: true
+    logging: {driver: none}
+    restart: 'no'
+    mem_limit: 128m
+    pids_limit: 64
+    expose: ['443']
+    environment:
+      LOGIN_GATEWAY_MODE: ${LOGIN_GATEWAY_MODE:-disabled}
+      LOGIN_API_HOST: ${LOGIN_API_HOST:-supabase.fixture.invalid}
+      LOGIN_CRM_HOST: ${LOGIN_CRM_HOST:-crm.fixture.invalid}
+    networks:
+      login-front:
+        aliases: ['${LOGIN_API_HOST:-supabase.fixture.invalid}']
+      login-upstream: {}
+    volumes:
+      - type: bind
+        source: ${LOGIN_INPUT_DIR:-../files/staff-login}
+        target: /run/staff-login
+        read_only: true
+        bind: {create_host_path: false}
+
+networks:
+  login-front:
+    internal: true
+  login-upstream:
+    external: true
+    name: ${LOGIN_UPSTREAM_NETWORK:-staff-login-upstream-unconfigured}
