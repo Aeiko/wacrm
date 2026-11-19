@@ -1,0 +1,51 @@
+# Staff inspection only. Preload verified images and use image IDs or digests;
+# Compose requires selectors but does not reject mutable tags.
+services:
+  crm:
+    image: ${STAFF_CRM_IMAGE:?Set a verified immutable CRM image reference}
+    pull_policy: never
+    user: nextjs
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    restart: 'no'
+    cpus: 1.0
+    mem_limit: 512m
+    pids_limit: 128
+    networks: [staff]
+    environment:
+      NEXT_PUBLIC_SUPABASE_URL: ${STAFF_CRM_PUBLIC_SUPABASE_URL:-https://supabase.fixture.invalid}
+      NEXT_PUBLIC_SITE_URL: ${STAFF_CRM_SITE_URL:-https://crm.fixture.invalid}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${STAFF_SUPABASE_ANON_KEY:?Set the inspection backend anon key}
+      WHATSAPP_COEXISTENCE_ENABLED: 'false'
+      WHATSAPP_COEXISTENCE_IMPORT_SETTINGS_ENABLED: 'false'
+      WHATSAPP_COEXISTENCE_HISTORY_REQUEST_ENABLED: 'false'
+
+  inspection:
+    image: ${STAFF_INSPECTION_IMAGE:?Set a verified immutable inspection image reference}
+    pull_policy: never
+    user: nextjs
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    restart: 'no'
+    cpus: 1.0
+    mem_limit: 256m
+    pids_limit: 64
+    networks: [staff]
+    stdin_open: true
+    tty: false
+    environment:
+      STAFF_INSPECTION_ORIGIN: ${STAFF_INSPECTION_ORIGIN:?Set the staff inspection origin}
+      STAFF_BACKEND_ORIGIN: http://inspection-gateway:8000
+      STAFF_AUTH_PUBLIC_URL: ${STAFF_CRM_PUBLIC_SUPABASE_URL:-https://supabase.fixture.invalid}
+      STAFF_SUPABASE_ANON_KEY: ${STAFF_SUPABASE_ANON_KEY:?Set the inspection backend anon key}
+      STAFF_SUPABASE_SERVICE_KEY: ${STAFF_SUPABASE_SERVICE_KEY:?Set the inspection backend service key}
+      STAFF_APP_ID: ${STAFF_APP_ID:?Set the inspection app ID}
+      STAFF_LOGIN_CONFIG_ID: ${STAFF_LOGIN_CONFIG_ID:?Set the inspection login config ID}
+      STAFF_WABA_ID: ${STAFF_WABA_ID:?Set the inspection WABA ID}
+      STAFF_PHONE_ID: ${STAFF_PHONE_ID:?Set the inspection phone ID}
+
+networks:
+  staff:
+    internal: true
