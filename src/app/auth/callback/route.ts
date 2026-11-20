@@ -13,13 +13,12 @@
 //
 // Flow:
 //   1. `?error=...`         → Supabase already rejected the link
-//                             (expired / used). Send to /login with a
-//                             reason it can explain.
+//                             (expired / used). Send back with an error.
 //   2. `?code=...`          → PKCE exchange (default email templates).
 //      `?token_hash=&type=` → verifyOtp (templates using {{ .TokenHash }}).
 //   3. success              → 303 to the validated `next` path
-//                             (/dashboard, /reset-password, /join/<t>).
-//      failure              → 303 to /login?error=link_invalid.
+//                             (/signup/password, /reset-password, etc.).
+//      failure              → 303 to /signup or /login with an error.
 //
 // The session cookies are written by `@supabase/ssr` through the
 // server client's cookie adapter, so the redirected-to page (and the
@@ -44,22 +43,24 @@ export const dynamic = 'force-dynamic';
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const next = safeNextPath(searchParams.get('next'));
+  const isSignup = next.split('?')[0] === '/signup/password';
+  const signupFailure = isSignup ? '/signup?error=link_invalid' : null;
 
   const upstreamError = parseSupabaseError(searchParams);
 
   if (upstreamError) {
-    return relativeRedirect(loginFailurePath(upstreamError));
+    return relativeRedirect(signupFailure ?? loginFailurePath(upstreamError));
   }
 
   const link = parseEmailLink(searchParams);
 
   if (!link) {
-    return relativeRedirect(loginFailurePath('link_invalid'));
+    return relativeRedirect(signupFailure ?? loginFailurePath('link_invalid'));
   }
 
   const supabase = await createClient();
 
-  const { error } =
+  const { data, error } =
     link.kind === 'code'
       ? await supabase.auth.exchangeCodeForSession(link.code)
       : await supabase.auth.verifyOtp({
@@ -67,17 +68,12 @@ export async function GET(request: Request) {
           token_hash: link.tokenHash,
         });
 
-  if (error) {
-    // Most common cause in practice: the PKCE code verifier cookie is
-    // missing because the link was opened in a different browser than
-    // the one that requested it. The email itself was still verified
-    // by Supabase, so /login's message tells the user to just sign in.
+  if (error || (isSignup && !data.session?.user.email_confirmed_at)) {
     console.warn('[GET /auth/callback] session exchange failed:', {
       kind: link.kind,
-      message: error.message,
     });
 
-    return relativeRedirect(loginFailurePath('link_invalid'));
+    return relativeRedirect(signupFailure ?? loginFailurePath('link_invalid'));
   }
 
   return relativeRedirect(next);

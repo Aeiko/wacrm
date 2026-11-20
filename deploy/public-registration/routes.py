@@ -29,10 +29,12 @@ def build(cidrs, gateway='http://172.29.124.8:8080', inert=False):
                                          'sourceCriterion': {'requestHost': True}}}
         routes[path] = r
 
-    route('form', crm + ' && Path(`/signup`) && (Method(`GET`) || Method(`HEAD`))')
+    route('form', crm + ' && (Path(`/signup`) || Path(`/signup/password`)) && (Method(`GET`) || Method(`HEAD`))')
     route('callback', crm + ' && Path(`/auth/callback`) && Method(`GET`)', 20)
     route('signup', api + ' && Path(`/auth/v1/signup`) && Method(`POST`)', 3)
     route('signup-preflight', api + ' && Path(`/auth/v1/signup`) && Method(`OPTIONS`)')
+    route('first-password', api + ' && Path(`/auth/v1/user`) && Method(`PUT`)', 20)
+    route('first-password-preflight', api + ' && Path(`/auth/v1/user`) && Method(`OPTIONS`) && Header(`Access-Control-Request-Method`, `PUT`)')
     route('verify-preview', api + ' && Path(`/auth/v1/verify`) && Method(`GET`)', 60)
     route('verify-submit', api + ' && Path(`/auth/v1/verify`) && Method(`POST`)', 20)
     route('exchange', api + ' && Path(`/auth/v1/token`) && Query(`grant_type`, `pkce`) && Method(`POST`)', 20, private)

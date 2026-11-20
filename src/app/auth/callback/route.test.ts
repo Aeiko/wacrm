@@ -41,6 +41,29 @@ describe('GET /auth/callback', () => {
     expect(res.headers.get('location')).toBe('/reset-password');
   });
 
+  it.each(['/signup/password', '/signup/password?invite=example'])(
+    'exchanges a PKCE code before redirecting to %s',
+    async (next) => {
+      mocks.exchangeCodeForSession.mockResolvedValueOnce({
+        data: { session: { user: { email_confirmed_at: '2026-11-20T00:00:00Z' } } },
+        error: null,
+      });
+      const res = await GET(request(`code=pkce-123&next=${encodeURIComponent(next)}`));
+      expect(mocks.exchangeCodeForSession).toHaveBeenCalledWith('pkce-123');
+      expect(res.status).toBe(303);
+      expect(res.headers.get('location')).toBe(next);
+    }
+  );
+
+  it('returns to signup if the exchange does not yield a verified session', async () => {
+    mocks.exchangeCodeForSession.mockResolvedValueOnce({
+      data: { session: null },
+      error: null,
+    });
+    const res = await GET(request('code=pkce-123&next=%2Fsignup%2Fpassword'));
+    expect(res.headers.get('location')).toBe('/signup?error=link_invalid');
+  });
+
   it('verifies a token_hash link through verifyOtp', async () => {
     const res = await GET(
       request('token_hash=th-1&type=recovery&next=%2Freset-password'),

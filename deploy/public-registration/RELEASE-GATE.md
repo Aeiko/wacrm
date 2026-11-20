@@ -1,0 +1,11 @@
+# Public registration rollout hold — 2026-11-20
+
+Google Workspace delivery, permanent-link shape, confirmation and PKCE passed in the approved single-recipient disposable rehearsal. The operator ran the private confirmation helper and reported success. The disposable services are gone; no hosted account was created.
+
+The published **password-first** release gateway `aa8100432e81d44bb7da215faa1d35e84c9d632d` is preloaded but must not be activated for public registration. The replacement gateway starts from that reviewed source and preserves its member and reply feature flags.
+
+**Blocker:** GoTrue v2.197.0 [`Signup`](https://github.com/supabase/auth/blob/v2.197.0/internal/api/signup.go) keeps the original password for an unconfirmed duplicate email while allowing another confirmation to be issued. The release gateway submits the browser's chosen password before verifying mailbox ownership. PKCE protects session exchange, not activation of the stored password. This is a code-review finding, not a production attack test.
+
+**Email-first release order:** keep public routes shut; verify that no alternate public GoTrue/PostgREST ingress reaches this database and that no alternate signup path can supply the enrollment marker. Apply `091_public_registration_email_first.sql` on the isolated database with the registration gateway still off. Verify the private confirm RPC over the gateway's internal PostgREST peer, then stage the matched Next standalone and gateway. The new flow asks for name and email, verifies in the same browser via PKCE, then allows that enrollment session to choose the first password. Older pending accounts cannot confirm through the new public gateway; their credentials and existing confirmed accounts are untouched. No standalone signup, resend, or bare Auth admin route may bypass the gateway.
+
+Require disposable packaged Chromium acceptance with the same migration and images before coordinating a single cutover with the release integrator. Retain the existing Auth, login, webhook, member and reply settings outside the scoped release. Rollback closes only the registration router/flag and restores the prior scoped Auth mail and signup configuration; retain the migration so held accounts cannot acquire a previously supplied password. No new live mail or accounts are needed for staging.

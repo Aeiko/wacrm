@@ -94,6 +94,17 @@ export async function middleware(request: NextRequest) {
     return withRefreshedCookies(NextResponse.redirect(url));
   }
 
+  if (
+    request.nextUrl.pathname === '/signup/password' &&
+    !user?.email_confirmed_at
+  ) {
+    const url = request.nextUrl.clone();
+    url.pathname = '/signup';
+    url.search = '?error=link_invalid';
+
+    return withRefreshedCookies(NextResponse.redirect(url, 303));
+  }
+
   // Protected pages - redirect to login if not authenticated
   // Every top-level route under src/app/(dashboard)/ belongs here —
   // middleware.test.ts reads that directory and fails on a missing one.

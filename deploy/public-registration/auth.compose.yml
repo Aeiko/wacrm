@@ -17,7 +17,8 @@ services:
       GOTRUE_RATE_LIMIT_EMAIL_SENT: '12'
       GOTRUE_SMTP_MAX_FREQUENCY: 120s
       GOTRUE_SMTP_HOST: ${WACRM_REG_SMTP_HOST:?verified SMTP host required}
-      GOTRUE_SMTP_PORT: ${WACRM_REG_SMTP_PORT:?verified SMTP port required}
-      GOTRUE_SMTP_ADMIN_EMAIL: ${WACRM_REG_SMTP_FROM:?approved sender required}
-      GOTRUE_SMTP_USER: ${WACRM_REG_SMTP_USER:-}
-      GOTRUE_SMTP_PASS: ${WACRM_REG_SMTP_PASS:-}
+      # GoTrue's pinned mailer only forces implicit TLS on port 465.
+      GOTRUE_SMTP_PORT: '465'
+      GOTRUE_SMTP_ADMIN_EMAIL: team@sqkii.com
+      GOTRUE_SMTP_USER: ${WACRM_REG_SMTP_USER:?dedicated SMTP username required}
+      GOTRUE_SMTP_PASS: ${WACRM_REG_SMTP_PASS:?dedicated SMTP credential required}

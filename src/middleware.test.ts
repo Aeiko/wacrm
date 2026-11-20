@@ -10,7 +10,7 @@ import { NextRequest } from 'next/server';
 //                      i.e. the freshly *rotated* auth token. The whole point
 //                      of the test is that these must survive onto whatever
 //                      response the middleware returns — including redirects.
-let mockUser: { id: string } | null = null;
+let mockUser: { id: string; email_confirmed_at?: string } | null = null;
 
 let refreshedCookies: Array<{
   name: string;
@@ -175,6 +175,23 @@ describe('middleware — Coexistence worker authentication boundary', () => {
     expect(response.status).toBe(401);
     expect(response.headers.get('cache-control')).toBe('private, no-store');
     expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+  });
+});
+
+describe('middleware — first password setup', () => {
+  it.each([null, { id: 'unconfirmed' }])(
+    'redirects visitors without a verified user',
+    async (user) => {
+      mockUser = user;
+      const res = await middleware(new NextRequest('https://app.test/signup/password'));
+      expect(res.headers.get('location')).toBe('https://app.test/signup?error=link_invalid');
+    },
+  );
+
+  it('lets a verified user reach password setup', async () => {
+    mockUser = { id: 'verified', email_confirmed_at: '2026-11-20T00:00:00Z' };
+    const res = await middleware(new NextRequest('https://app.test/signup/password'));
+    expect(res.headers.get('x-middleware-next')).toBe('1');
   });
 });
 

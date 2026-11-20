@@ -1,4 +1,5 @@
 import { createServer, request } from 'node:http';
+import { randomBytes } from 'node:crypto';
 import { isIPv4 } from 'node:net';
 import { readFileSync } from 'node:fs';
 
@@ -33,8 +34,11 @@ const apiOrigin='https://'+api;
 const member=process.env.LOGIN_MEMBER_SIGNUP_ENABLED==='true';
 const registration=process.env.LOGIN_PUBLIC_EMAIL_REGISTRATION==='true';
 const callback=origin+'/auth/callback';
-const signupRedirect=callback+'?next=%2Fdashboard';
-const budget={password:5,refresh_token:30,signup:3,verify:20,pkce:20};
+const passwordPath='/signup/password';
+const signupRedirect=callback+'?next='+encodeURIComponent(passwordPath);
+const budget={password:5,refresh_token:30,signup:3,verify:20,pkce:20,firstPassword:20};
+const passwordWrites=new Set();
+const jsonContentType=req=>req.headersDistinct['content-type']?.length===1&&/^application\/json(?:\s*;\s*charset\s*=\s*(?:utf-8|"utf-8"))?$/i.test(req.headers['content-type']);
 const challenge=/^[A-Za-z0-9_-]{43}$/;
 const verifier=/^[A-Za-z0-9._~-]{43,128}$/;
 const signupToken=/^pkce_[0-9a-f]{56}$/;
@@ -70,7 +74,7 @@ function limited(kind,address){
   return ++buckets.get(key).count>budget[kind];
 }
 
-async function session(s){
+async function session(s,{signupOnly=false}={}){
   if(!/^Bearer [A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(s??''))return false;
 
   try{
@@ -82,8 +86,10 @@ async function session(s){
 return false;}
 
     // GoTrue validates the actual bearer; role and subject come from its verified user response.
-    const {id,role,aud}=await r.json();
+    const {id,role,aud,email_confirmed_at,app_metadata}=await r.json();
     const claims=JSON.parse(Buffer.from(s.split('.')[1],'base64url'));
+
+    if(signupOnly&&(!email_confirmed_at||app_metadata?.wacrm_email_first!==true||!claims.amr?.some(x=>x.method==='email/signup')))return null;
 
     return uuid(id)&&role==='authenticated'&&aud==='authenticated'&&claims.sub===id&&claims.role===role&&claims.aud===aud&&claims.iss===`https://${api}/auth/v1`&&Number.isSafeInteger(claims.exp)&&claims.exp>Date.now()/1000&&uuid(claims.session_id)?id:null;
   }catch{return false;}
@@ -265,13 +271,30 @@ return end(res,413);}
 function signupBody(body){
   const p=JSON.parse(body);
 
-  if(!p||!isText(p.email)||p.email.length>254||!p.email.includes('@')||!isText(p.password)||p.password.length<6||Buffer.byteLength(p.password)>72||!isText(p.code_challenge)||!challenge.test(p.code_challenge)||p.code_challenge_method!=='s256')return null;
+  if(!p||!isText(p.email)||p.email.length>254||!p.email.includes('@')||!isText(p.code_challenge)||!challenge.test(p.code_challenge)||p.code_challenge_method!=='s256')return null;
   const name=p.data?.full_name;
 
   if(!isText(name)||!name.trim()||name.length>120)return null;
 
   // Never forward client claims, extra credentials, provider selectors, or role metadata.
-  return Buffer.from(JSON.stringify({email:p.email,password:p.password,data:{full_name:name.trim()},code_challenge:p.code_challenge,code_challenge_method:'s256'}));
+  return Buffer.from(JSON.stringify({email:p.email,password:randomBytes(32).toString('base64url'),data:{full_name:name.trim(),wacrm_email_first:true},code_challenge:p.code_challenge,code_challenge_method:'s256'}));
+}
+
+async function confirmationEligible(token){
+  const {host,port}=upstreams.rest;
+
+  const gate=await fetch(`http://${host}:${port}/rpc/can_confirm_public_registration`,{
+    method:'POST',headers:{apikey:anon,authorization:`Bearer ${anon}`,'content-type':'application/json'},
+    body:JSON.stringify({p_token:token}),redirect:'error',signal:AbortSignal.timeout(3500),
+  });
+
+  if(!gate.ok){await gate.body?.cancel();
+
+return null;}
+
+  const value=await gate.json();
+
+  return value===true||value===false?value:null;
 }
 
 async function verify(req,res,query){
@@ -300,6 +323,9 @@ async function verify(req,res,query){
   const token=/^token=(pkce_[0-9a-f]{56})$/.exec(body.toString())?.[1];
 
   if(!signupToken.test(token??''))return end(res,400);
+  const eligible=await confirmationEligible(token);
+
+  if(eligible!==true)return end(res,eligible===false?404:503);
   const q=new URLSearchParams({token,type:'signup',redirect_to:signupRedirect});
 
   return pass(req,res,upstreams.auth,'/verify?'+q,[],undefined,{method:'GET',confirm:true});
@@ -324,7 +350,7 @@ const server=createServer({maxHeaderSize:16_384,requestTimeout:8000,headersTimeo
         res.setHeader('Referrer-Policy','no-referrer');
         const q=new URLSearchParams(query);
 
-        if(q.get('next')!=='/dashboard'||q.size>5||[...q].some(([k])=>q.getAll(k).length!==1||!['next','code','error','error_code','error_description'].includes(k))||q.has('code')&&!uuid(q.get('code')))return end(res,404);
+        if(q.get('next')!==passwordPath||q.size>5||[...q].some(([k])=>q.getAll(k).length!==1||!['next','code','error','error_code','error_description'].includes(k))||q.has('code')&&!uuid(q.get('code')))return end(res,404);
 
         return pass(req,res,upstreams.crm,raw,['host','cookie']);
       }
@@ -371,7 +397,7 @@ if(bytes>26000)return end(res,413);chunks.push(chunk);}
 
           return res.end(JSON.stringify({enabled:false,launch_available:false,reason:'launch_prerequisites_incomplete',attempt:null}));
         }
-      }else if(!['GET','HEAD'].includes(m)||!(path.startsWith('/_next/static/')||['/login','/dashboard','/inbox','/favicon.ico'].includes(path)||registration&&path==='/signup'&&(query===undefined||/^_rsc=[A-Za-z0-9_-]{1,64}$/.test(query))))return end(res,404);
+      }else if(!['GET','HEAD'].includes(m)||!(path.startsWith('/_next/static/')||['/login','/dashboard','/inbox','/favicon.ico'].includes(path)||registration&&['/signup',passwordPath].includes(path)&&(query===undefined||/^_rsc=[A-Za-z0-9_-]{1,64}$/.test(query)||path==='/signup'&&query==='error=link_invalid')))return end(res,404);
 
       return pass(req,res,upstreams.crm,raw,pageHeaders);
     }
@@ -385,6 +411,7 @@ if(bytes>26000)return end(res,413);chunks.push(chunk);}
     const auth=path.startsWith('/auth/v1/');
     const token=path==='/auth/v1/token'&&get==='POST';
     const user=path==='/auth/v1/user'&&get==='GET'&&!query;
+    const firstPassword=registration&&path==='/auth/v1/user'&&get==='PUT'&&query===undefined;
     const logout=path==='/auth/v1/logout'&&get==='POST'&&(!query||/^scope=(global|local)$/.test(query));
     const rest=path.startsWith('/rest/v1/')&&(get==='GET'&&tables.has(path.slice(9))||get==='POST'&&path==='/rest/v1/rpc/dashboard_overview'&&!query);
     const grant=/^grant_type=(password|refresh_token)$/.exec(query??'')?.[1];
@@ -393,9 +420,9 @@ if(bytes>26000)return end(res,413);chunks.push(chunk);}
     // Traefik exposes this exchange only to the pinned CRM peer, never the public API router.
     const pkce=registration&&path==='/auth/v1/token'&&m==='POST'&&query==='grant_type=pkce'&&!req.headers.origin;
 
-    if(!(token&&grant||user||logout||rest||signup||pkce))return end(res,404);
+    if(!(token&&grant||user||logout||rest||signup||pkce||firstPassword))return end(res,404);
 
-    if(signup&&req.headers.origin!==origin)return end(res,403);
+    if((signup||firstPassword)&&req.headers.origin!==origin)return end(res,403);
 
     if(rest&&get==='GET'&&!safeSelect(query))return end(res,404);
 
@@ -416,6 +443,42 @@ return end(res,204);
     const bearer=req.headers.authorization;
 
     if(req.headers.apikey!==anon||((token||signup)&&bearer!==`Bearer ${anon}`))return end(res,401);
+
+    if(firstPassword){
+      if(limited('firstPassword',req.socket.remoteAddress))return end(res,429);
+
+      if(!jsonContentType(req))return end(res,415);
+      const body=await readBody(req,1024);
+
+      if(!body)return end(res,413);
+      const p=JSON.parse(body);
+
+      if(!p||!isText(p.password)||p.password.length<6||Buffer.byteLength(p.password)>72)return end(res,400);
+
+      // The SDK can include unused PKCE fields on password updates.
+      if(Object.keys(p).some(k=>k!=='password'&&!((k==='code_challenge'||k==='code_challenge_method')&&p[k]===null)))return end(res,400);
+      const id=await session(bearer,{signupOnly:true});
+
+      if(!id)return end(res,403);
+
+      if(passwordWrites.has(id))return end(res,409);
+      passwordWrites.add(id);
+
+      try{
+        if(!await session(bearer,{signupOnly:true}))return end(res,403);
+        const {host,port}=upstreams.auth;
+
+        const result=await fetch(`http://${host}:${port}/user`,{
+          method:'PUT',headers:{authorization:bearer,'content-type':'application/json'},
+          body:JSON.stringify({password:p.password}),redirect:'error',signal:AbortSignal.timeout(8000),
+        });
+
+        const resultBody=await result.arrayBuffer();
+        res.writeHead(result.status,{'Content-Type':'application/json'});
+
+        return res.end(Buffer.from(resultBody));
+      }finally{passwordWrites.delete(id);}
+    }
 
     if(!token&&!signup){
       const id=await session(bearer);
@@ -438,7 +501,7 @@ if(m==='POST'){
     }
 
     if(signup||pkce){
-      if(req.headersDistinct['content-type']?.length!==1||!/^application\/json(?:\s*;\s*charset\s*=\s*(?:utf-8|"utf-8"))?$/i.test(req.headers['content-type']))return end(res,415);
+      if(!jsonContentType(req))return end(res,415);
 
       if(signup)body=signupBody(body);
       else{
@@ -449,6 +512,8 @@ if(m==='POST'){
       if(!body)return end(res,400);
     }
 
+    // Do not send mail if the passwordless registration migration is not ready.
+    if(signup&&await confirmationEligible(null)!==false)return end(res,503);
     const destination=signup?'/signup?'+new URLSearchParams({redirect_to:signupRedirect}):raw.slice(8);
 
     return pass(req,res,auth?upstreams.auth:upstreams.rest,destination,headers,body);

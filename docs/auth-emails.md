@@ -14,8 +14,16 @@ forwards to the page the flow needs:
 
 | Flow | Started from | Link returns to |
 |---|---|---|
-| Email confirmation after sign-up | `/signup` | `/auth/callback?next=/dashboard` (or `/join/<token>` when signing up from an invite) |
+| Email confirmation after sign-up | `/signup` | `/auth/callback?next=/signup/password` |
 | Password reset | `/forgot-password` | `/auth/callback?next=/reset-password` |
+
+Signup requires email confirmation to be enabled. After the exchange,
+`/signup/password` sets the first password through the Supabase browser
+SDK and sends the user to the dashboard. Where invite signup is allowed,
+the callback carries the invite through password setup and returns to
+the invitation instead. The public gateway replaces the SDK's throwaway
+signup password and must authorize the update against the verified
+signup session.
 
 "The app's own origin" is the origin the browser loaded the page from
 (`window.location.origin`) — `https://crm.example.com` in production,
@@ -87,14 +95,11 @@ additional_redirect_urls = ["http://localhost:3000/**"]
 
 The default flow is PKCE: the browser that *requested* the email holds
 a one-time code verifier in a cookie, and `/auth/callback` needs it to
-complete the exchange. Open the link on a different device or browser
-and the callback lands on `/login` with a message saying the link
-couldn't be used. Two things to know:
-
-- **Email confirmation still succeeded.** Supabase verified the address
-  before redirecting; the user can simply sign in.
-- **Password reset must be finished in the same browser** it was
-  requested from — or request a new link there.
+complete the exchange. Open the link in the same browser you requested
+it from. Otherwise signup returns to `/signup` with an error; Supabase
+may already have verified the address, but you haven't set a password.
+For password reset, the callback returns to `/login` with an error; you
+can request a new reset link.
 
 To make links device-independent, switch the Supabase email templates
 (**Authentication → Email Templates**) to the token-hash form, which
@@ -102,7 +107,7 @@ To make links device-independent, switch the Supabase email templates
 
 ```html
 <!-- Confirm signup -->
-<a href="{{ .SiteURL }}/auth/callback?token_hash={{ .TokenHash }}&type=email&next=/dashboard">Confirm your email</a>
+<a href="{{ .SiteURL }}/auth/callback?token_hash={{ .TokenHash }}&type=email&next=/signup/password">Confirm your email</a>
 
 <!-- Reset password -->
 <a href="{{ .SiteURL }}/auth/callback?token_hash={{ .TokenHash }}&type=recovery&next=/reset-password">Reset your password</a>
