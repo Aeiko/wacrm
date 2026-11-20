@@ -1,0 +1,23 @@
+# Overlay for the isolated permanent Auth service only. Never run a full-stack up.
+# WACRM_REG_SMTP_* values must come from the approved private host env, not Git.
+services:
+  auth:
+    environment:
+      API_EXTERNAL_URL: https://wacrm-api.sqkii.land/auth/v1
+      GOTRUE_JWT_ISSUER: https://wacrm-api.sqkii.land/auth/v1
+      GOTRUE_SITE_URL: https://wacrm.sqkii.land
+      GOTRUE_URI_ALLOW_LIST: https://wacrm.sqkii.land/auth/callback
+      GOTRUE_DISABLE_SIGNUP: 'false'
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: 'true'
+      GOTRUE_EXTERNAL_ANONYMOUS_USERS_ENABLED: 'false'
+      GOTRUE_EXTERNAL_PHONE_ENABLED: 'false'
+      GOTRUE_MAILER_AUTOCONFIRM: 'false'
+      GOTRUE_MAILER_URLPATHS_CONFIRMATION: /auth/v1/verify
+      GOTRUE_MAILER_OTP_EXP: '1800'
+      GOTRUE_RATE_LIMIT_EMAIL_SENT: '12'
+      GOTRUE_SMTP_MAX_FREQUENCY: 120s
+      GOTRUE_SMTP_HOST: ${WACRM_REG_SMTP_HOST:?verified SMTP host required}
+      GOTRUE_SMTP_PORT: ${WACRM_REG_SMTP_PORT:?verified SMTP port required}
+      GOTRUE_SMTP_ADMIN_EMAIL: ${WACRM_REG_SMTP_FROM:?approved sender required}
+      GOTRUE_SMTP_USER: ${WACRM_REG_SMTP_USER:-}
+      GOTRUE_SMTP_PASS: ${WACRM_REG_SMTP_PASS:-}
