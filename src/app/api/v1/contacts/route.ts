@@ -33,8 +33,13 @@ export async function GET(request: Request) {
     const ctx = await requireApiKey(request, 'contacts:read');
     const { limit, cursor } = parseListParams(request);
     const url = new URL(request.url);
-    const searchFilter = contactSearchFilter(url.searchParams.get('search') ?? '');
+
+    const searchFilter = contactSearchFilter(
+      url.searchParams.get('search') ?? ''
+    );
+
     const tag = url.searchParams.get('tag');
+
     if (tag && !isUuid(tag)) {
       return fail('bad_request', "'tag' must be a tag id (UUID)", 400);
     }
@@ -68,11 +73,14 @@ export async function GET(request: Request) {
       .limit(limit + 1);
 
     const kf = keysetFilter(cursor);
+
     if (kf) query = query.or(kf);
 
     const { data, error } = await query;
+
     if (error) {
       console.error('[api/v1/contacts] list error:', error);
+
       return fail('internal', 'Failed to list contacts', 500);
     }
 
@@ -83,6 +91,7 @@ export async function GET(request: Request) {
       (data ?? []) as unknown as Array<{ created_at: string; id: string }>,
       limit
     );
+
     return okList(
       items.map((r) => serializeContact(r as Record<string, unknown>)),
       nextCursor
@@ -100,11 +109,13 @@ export async function POST(request: Request) {
       string,
       unknown
     > | null;
+
     if (!body || typeof body !== 'object') {
       return fail('bad_request', 'Request body must be a JSON object', 400);
     }
 
     const phone = typeof body.phone === 'string' ? body.phone.trim() : '';
+
     if (!phone) {
       return fail('bad_request', "'phone' is required", 400);
     }
@@ -135,6 +146,7 @@ export async function POST(request: Request) {
     }
 
     const contact = await getContactById(ctx.supabase, ctx.accountId, id);
+
     return ok(contact, created ? 201 : 200);
   } catch (err) {
     if (err instanceof ContactError) {
@@ -144,6 +156,7 @@ export async function POST(request: Request) {
         err.status
       );
     }
+
     return toApiErrorResponse(err);
   }
 }

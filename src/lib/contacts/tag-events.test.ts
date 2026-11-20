@@ -29,7 +29,7 @@ const base = {
 beforeEach(() => {
   mocks.add.mockReset();
   mocks.dispatch.mockReset();
-  mocks.dispatch.mockResolvedValue(undefined);
+  mocks.dispatch.mockResolvedValue('completed');
 });
 
 describe('addContactTagAndDispatch', () => {
@@ -41,7 +41,11 @@ describe('addContactTagAndDispatch', () => {
       context: { vars: { source: 'flow', _tag_chain_depth: 1 } },
     });
 
-    expect(result).toEqual({ added: true, dispatched: true });
+    expect(result).toEqual({
+      added: true,
+      dispatched: true,
+      status: 'completed',
+    });
     expect(mocks.dispatch).toHaveBeenCalledWith({
       accountId: 'account-1',
       triggerType: 'tag_added',
@@ -59,6 +63,7 @@ describe('addContactTagAndDispatch', () => {
     await expect(addContactTagAndDispatch(base)).resolves.toEqual({
       added: false,
       dispatched: false,
+      status: 'completed',
       reason: 'duplicate',
     });
     expect(mocks.dispatch).not.toHaveBeenCalled();
@@ -75,6 +80,7 @@ describe('addContactTagAndDispatch', () => {
     ).resolves.toEqual({
       added: true,
       dispatched: false,
+      status: 'completed',
       reason: 'max_depth',
     });
     expect(mocks.dispatch).not.toHaveBeenCalled();
@@ -84,11 +90,14 @@ describe('addContactTagAndDispatch', () => {
     mocks.add.mockResolvedValue(true);
     mocks.dispatch.mockImplementation(async (event) => {
       const nextTag = event.context.tag_id === 'tag-a' ? 'tag-b' : 'tag-a';
-      await addContactTagAndDispatch({
+
+      const result = await addContactTagAndDispatch({
         ...base,
         tagId: nextTag,
         context: event.context,
       });
+
+      return result.status;
     });
 
     await addContactTagAndDispatch({ ...base, tagId: 'tag-a' });

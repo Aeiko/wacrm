@@ -28,11 +28,13 @@ const MAX_RETRY_MS = 120_000;
  */
 export function batchRetryDelayMs(
   status: number,
-  retryAfter: string | null,
+  retryAfter: string | null
 ): number | null {
   if (status !== 429) return null;
 
   const seconds = Number(retryAfter);
+
   if (!Number.isFinite(seconds) || seconds <= 0) return DEFAULT_RETRY_MS;
+
   return Math.min(seconds * 1_000, MAX_RETRY_MS);
 }

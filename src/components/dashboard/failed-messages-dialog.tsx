@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { useFormatter, useTranslations } from 'next-intl'
+import { useFormatter, useTranslations } from 'use-intl'
 
 import {
   Dialog,

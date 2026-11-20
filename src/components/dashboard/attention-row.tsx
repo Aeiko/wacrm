@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { useState, type ComponentType, type ReactNode } from 'react'
 import { AlertTriangle, ChevronRight, Clock, MessageSquare, UserPlus } from 'lucide-react'
-import { useTranslations } from 'next-intl'
+import { useTranslations } from 'use-intl'
 
 import type { DashboardOverview } from '@/lib/dashboard/overview'
 import { minutesBetween } from '@/lib/dashboard/overview'

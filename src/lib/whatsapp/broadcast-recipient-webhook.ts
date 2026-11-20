@@ -28,29 +28,57 @@ function failureMessage(failure: RecipientStatusFailure): string {
 
 export async function applyBroadcastRecipientStatus(
   db: SupabaseClient,
+  accountId: string,
   event: RecipientStatusEvent
 ): Promise<RecipientStatusOutcome> {
   if (!isRecipientStatus(event.status)) return 'skipped';
   const predecessors = allowedPredecessors(event.status);
+
   if (predecessors.length === 0) return 'skipped';
 
+  const { data: recipients, error: lookupError } = await db
+    .from('broadcast_recipients')
+    .select('id, broadcasts!inner(account_id)')
+    .eq('whatsapp_message_id', event.whatsappMessageId)
+    .eq('broadcasts.account_id', accountId);
+
+  if (lookupError) {
+    console.error(
+      'Error looking up broadcast recipients for status:',
+      lookupError
+    );
+
+    return 'error';
+  }
+
+  if (!recipients?.length) return 'skipped';
+
   const update: Record<string, unknown> = { status: event.status };
+
   if (event.status === 'sent') update.sent_at = event.occurredAt;
+
   if (event.status === 'delivered') update.delivered_at = event.occurredAt;
+
   if (event.status === 'read') update.read_at = event.occurredAt;
+
   if (event.failure) update.error_message = failureMessage(event.failure);
 
   const { data, error } = await db
     .from('broadcast_recipients')
     .update(update)
-    .eq('whatsapp_message_id', event.whatsappMessageId)
+    .in(
+      'id',
+      recipients.map((recipient) => recipient.id)
+    )
     .in('status', predecessors)
     .select('id');
 
   if (error) {
     console.error('Error updating broadcast recipient status:', error);
+
     return 'error';
   }
+
   return data && data.length > 0 ? 'updated' : 'skipped';
 }
 
@@ -65,10 +93,14 @@ export function isReplyAttributable(
   now: Date
 ): boolean {
   if (!isRecipientStatus(recipient.status)) return false;
+
   if (!allowedPredecessors('replied').includes(recipient.status)) return false;
+
   if (!recipient.sent_at) return false;
   const sentAt = Date.parse(recipient.sent_at);
+
   if (Number.isNaN(sentAt)) return false;
+
   return now.getTime() - sentAt <= BROADCAST_REPLY_WINDOW_MS;
 }
 
@@ -88,9 +120,12 @@ export async function flagBroadcastReply(
 
   if (error) {
     console.error('Error fetching latest broadcast recipient:', error);
+
     return 'error';
   }
+
   const latest = (rows?.[0] ?? null) as LatestBroadcastRecipient | null;
+
   if (!latest || !isReplyAttributable(latest, now)) return 'skipped';
 
   const { data: updated, error: updateError } = await db
@@ -102,7 +137,9 @@ export async function flagBroadcastReply(
 
   if (updateError) {
     console.error('Error marking broadcast recipient replied:', updateError);
+
     return 'error';
   }
+
   return updated && updated.length > 0 ? 'updated' : 'skipped';
 }

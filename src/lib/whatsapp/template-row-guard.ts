@@ -22,6 +22,7 @@ import type { MessageTemplate } from '@/types';
 export function isMessageTemplate(row: unknown): row is MessageTemplate {
   if (!row || typeof row !== 'object') return false;
   const r = row as Record<string, unknown>;
+
   return (
     typeof r.id === 'string' &&
     typeof r.user_id === 'string' &&
@@ -36,16 +37,18 @@ export function isMessageTemplate(row: unknown): row is MessageTemplate {
  */
 export function assertMessageTemplate(
   row: unknown,
-  context: string,
+  context: string
 ): MessageTemplate {
   if (!isMessageTemplate(row)) {
     const id =
       row && typeof row === 'object' && 'id' in row
         ? String((row as { id: unknown }).id)
         : '(unknown id)';
+
     throw new Error(
-      `Malformed message_templates row ${id} in ${context} — missing required fields (id, user_id, name, body_text).`,
+      `Malformed message_templates row ${id} in ${context} — missing required fields (id, user_id, name, body_text).`
     );
   }
+
   return row;
 }

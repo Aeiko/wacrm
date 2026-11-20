@@ -51,6 +51,7 @@ export function generateApiKey(): GeneratedApiKey {
   // and shorter than hex (43 vs 64 chars).
   const body = randomBytes(32).toString('base64url');
   const plaintext = `${API_KEY_PREFIX}${body}`;
+
   return {
     plaintext,
     hash: hashApiKey(plaintext),
@@ -88,6 +89,8 @@ export function looksLikeApiKey(value: string): boolean {
 export function timingSafeHexEqual(a: string, b: string): boolean {
   const bufA = Buffer.from(a, 'hex');
   const bufB = Buffer.from(b, 'hex');
+
   if (bufA.length !== bufB.length) return false;
+
   return timingSafeEqual(bufA, bufB);
 }

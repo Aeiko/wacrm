@@ -36,6 +36,7 @@ import { getT } from '@/lib/i18n/translate';
 const t = getT('Api');
 
 const MAX_NAME_LEN = 80;
+
 // Hard ceiling on caller-supplied expiry (1 year), mirroring the
 // invite-link clamp. NULL/absent = never expires.
 const MAX_EXPIRY_DAYS = 365;
@@ -59,6 +60,7 @@ export async function GET() {
 
     if (error) {
       console.error('[GET /api/account/api-keys] fetch error:', error);
+
       return NextResponse.json(
         { error: t('account.apiKeys.loadFailed') },
         { status: 500 }
@@ -79,6 +81,7 @@ export async function POST(request: Request) {
       `admin:apiKeyCreate:${ctx.userId}`,
       RATE_LIMITS.adminAction
     );
+
     if (!limit.success) return rateLimitResponse(limit);
 
     const body = (await request.json().catch(() => null)) as {
@@ -88,12 +91,14 @@ export async function POST(request: Request) {
     } | null;
 
     const rawName = typeof body?.name === 'string' ? body.name.trim() : '';
+
     if (!rawName) {
       return NextResponse.json(
         { error: t('account.apiKeys.nameRequired') },
         { status: 400 }
       );
     }
+
     if (rawName.length > MAX_NAME_LEN) {
       return NextResponse.json(
         { error: t('account.apiKeys.nameTooLong', { max: MAX_NAME_LEN }) },
@@ -104,6 +109,7 @@ export async function POST(request: Request) {
     // Scopes default to none if omitted — that yields a key that can
     // only call the scope-free endpoints (e.g. GET /api/v1/me).
     const scopes = normalizeScopes(body?.scopes ?? []);
+
     if (scopes === null) {
       return NextResponse.json(
         { error: t('account.apiKeys.scopesInvalid') },
@@ -113,6 +119,7 @@ export async function POST(request: Request) {
 
     let expiresAt: string | null = null;
     const rawExpiry = body?.expiresInDays;
+
     if (
       typeof rawExpiry === 'number' &&
       Number.isFinite(rawExpiry) &&
@@ -142,6 +149,7 @@ export async function POST(request: Request) {
 
     if (error || !data) {
       console.error('[POST /api/account/api-keys] insert error:', error);
+
       return NextResponse.json(
         { error: t('account.apiKeys.createFailed') },
         { status: 500 }

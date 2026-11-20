@@ -40,8 +40,10 @@ async function findTagIdsByName(
       if (error) throw error;
 
       const page = data ?? [];
+
       for (const tag of page) {
         const key = tagKey(tag.name);
+
         if (wantedKeys.has(key) && !tagIdByKey.has(key)) {
           tagIdByKey.set(key, tag.id);
         }
@@ -74,13 +76,13 @@ async function moveContactTagLinks(
     if (error) throw error;
 
     const page = data ?? [];
+
     if (page.length > 0) {
-      const { error: upsertError } = await supabase
-        .from('contact_tags')
-        .upsert(
-          page.map((row) => ({ contact_id: row.contact_id, tag_id: winnerId })),
-          { onConflict: 'contact_id,tag_id', ignoreDuplicates: true }
-        );
+      const { error: upsertError } = await supabase.from('contact_tags').upsert(
+        page.map((row) => ({ contact_id: row.contact_id, tag_id: winnerId })),
+        { onConflict: 'contact_id,tag_id', ignoreDuplicates: true }
+      );
+
       if (upsertError) throw upsertError;
     }
 
@@ -95,11 +97,13 @@ async function retireSupersededTag(
 ): Promise<void> {
   try {
     await moveContactTagLinks(supabase, superseded);
+
     const { error } = await supabase
       .from('tags')
       .delete()
       .eq('account_id', accountId)
       .eq('id', superseded.loserId);
+
     if (error) throw error;
   } catch (error) {
     console.warn(
@@ -140,10 +144,13 @@ export async function resolveImportTagIds(
 
   const uniqueNames: string[] = [];
   const seen = new Set<string>();
+
   for (const raw of tagNames) {
     const name = raw.trim();
+
     if (!name) continue;
     const key = tagKey(name);
+
     if (seen.has(key)) continue;
     seen.add(key);
     uniqueNames.push(name);
@@ -160,7 +167,9 @@ export async function resolveImportTagIds(
 
   for (const name of uniqueNames) {
     const key = tagKey(name);
+
     if (tagIdByKey.has(key)) continue;
+
     if (canCreateTags) toCreate.push(name);
     else skippedNames.push(name);
   }
@@ -182,13 +191,16 @@ export async function resolveImportTagIds(
 
     const canonical = await findTagIdsByName(supabase, accountId, toCreate);
     const supersededTags: SupersededTag[] = [];
+
     for (const tag of created ?? []) {
       const key = tagKey(tag.name);
       const winnerId = canonical.get(key);
+
       if (!winnerId) {
         tagIdByKey.set(key, tag.id);
       } else {
         tagIdByKey.set(key, winnerId);
+
         if (winnerId !== tag.id) {
           supersededTags.push({ loserId: tag.id, winnerId });
         }
@@ -224,8 +236,10 @@ export async function assignImportedContactTags(
 
   for (const { contactId, tagNames } of assignments) {
     const assignedTagIds = new Set<string>();
+
     for (const name of tagNames) {
       const tagId = tagIdByKey.get(name.trim().toLowerCase());
+
       if (!tagId || assignedTagIds.has(tagId)) continue;
       assignedTagIds.add(tagId);
       rows.push({ contact_id: contactId, tag_id: tagId });
@@ -239,10 +253,12 @@ export async function assignImportedContactTags(
 
   for (let i = 0; i < rows.length; i += chunkSize) {
     const chunk = rows.slice(i, i + chunkSize);
+
     const { error } = await supabase.from('contact_tags').upsert(chunk, {
       onConflict: 'contact_id,tag_id',
       ignoreDuplicates: true,
     });
+
     if (error) throw error;
     assigned += chunk.length;
   }

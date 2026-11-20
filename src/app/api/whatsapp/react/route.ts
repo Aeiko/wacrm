@@ -1,4 +1,6 @@
 import { NextResponse } from 'next/server';
+import { z } from 'zod';
+import { withAccountSendConnection } from '@/lib/whatsapp/coexistence/send-guard';
 import { requireRole, toErrorResponse } from '@/lib/auth/account';
 import { sendReactionMessage } from '@/lib/whatsapp/meta-api';
 import { decrypt } from '@/lib/whatsapp/encryption';
@@ -34,22 +36,25 @@ export async function POST(request: Request) {
     const { supabase, accountId, userId } = await requireRole('agent');
 
     const limit = checkRateLimit(`react:${userId}`, RATE_LIMITS.react);
+
     if (!limit.success) {
       return rateLimitResponse(limit);
     }
 
     const body = await request.json();
-    const { message_id, emoji } = body as {
-      message_id?: string;
-      emoji?: string;
-    };
 
-    if (!message_id || typeof emoji !== 'string') {
+    const parsed = z
+      .object({ message_id: z.uuid(), emoji: z.string() })
+      .safeParse(body);
+
+    if (!parsed.success) {
       return NextResponse.json(
         { error: t('react.idEmojiRequired') },
-        { status: 400 },
+        { status: 400 }
       );
     }
+
+    const { message_id, emoji } = parsed.data;
 
     // Resolve target message + its conversation; verify ownership.
     const { data: targetMessage, error: msgError } = await supabase
@@ -59,16 +64,16 @@ export async function POST(request: Request) {
       .maybeSingle();
 
     if (msgError || !targetMessage) {
-      return NextResponse.json({ error: t('react.messageNotFound') }, { status: 404 });
+      return NextResponse.json(
+        { error: t('react.messageNotFound') },
+        { status: 404 }
+      );
     }
 
     if (!targetMessage.message_id) {
       // No Meta ID yet — usually a sending/failed agent message. We can't
       // tell Meta to react to a message it never received.
-      return NextResponse.json(
-        { error: t('react.notSent') },
-        { status: 400 },
-      );
+      return NextResponse.json({ error: t('react.notSent') }, { status: 400 });
     }
 
     const { data: conversation, error: convError } = await supabase
@@ -78,96 +83,111 @@ export async function POST(request: Request) {
       .eq('account_id', accountId)
       .maybeSingle();
 
-    if (convError || !conversation) {
+    if (convError || !conversation || conversation.account_id !== accountId) {
       return NextResponse.json(
         { error: t('common.conversationNotFound') },
-        { status: 404 },
+        { status: 404 }
       );
     }
 
     const contact = Array.isArray(conversation.contact)
       ? conversation.contact[0]
       : conversation.contact;
+
     // Phone number, or the business-scoped user ID for a contact Meta
     // never gave us a number for (issue #519).
     const sendTarget = resolveContactSendTarget(contact);
+
     if (!sendTarget) {
       return NextResponse.json(
         { error: t('react.contactNoPhone') },
-        { status: 400 },
+        { status: 400 }
       );
     }
 
-    // WhatsApp config + access token. Account-scoped post-multi-user.
-    const { data: config, error: configError } = await supabase
-      .from('whatsapp_config')
-      .select('phone_number_id, access_token')
-      .eq('account_id', accountId)
-      .single();
+    return await withAccountSendConnection(supabase, accountId, async () => {
+      // WhatsApp config + access token. Account-scoped post-multi-user.
+      const { data: config, error: configError } = await supabase
+        .from('whatsapp_config')
+        .select('phone_number_id, access_token')
+        .eq('account_id', accountId)
+        .single();
 
-    if (configError || !config) {
-      return NextResponse.json(
-        { error: t('common.whatsappNotConfiguredDot') },
-        { status: 400 },
-      );
-    }
-
-    const accessToken = decrypt(config.access_token);
-
-    try {
-      await sendReactionMessage({
-        phoneNumberId: config.phone_number_id,
-        accessToken,
-        to: sendTarget.target,
-        targetMessageId: targetMessage.message_id,
-        emoji,
-      });
-    } catch (err) {
-      const message =
-        err instanceof Error ? err.message : t('react.unknownMetaError');
-      console.error('[whatsapp/react] Meta send failed:', message);
-      return NextResponse.json(
-        { error: t('react.metaError', { message }) },
-        { status: 502 },
-      );
-    }
-
-    // Mirror into DB. Empty emoji = removal.
-    if (emoji === '') {
-      const delError = await removeBusinessReaction(supabase, targetMessage.id);
-
-      if (delError) {
-        console.error('[whatsapp/react] DB delete failed:', delError.message);
+      if (configError || !config) {
         return NextResponse.json(
-          { error: t('react.dbDeleteFailed') },
-          { status: 500 },
+          { error: t('common.whatsappNotConfiguredDot') },
+          { status: 400 }
         );
       }
-    } else {
-      const upsertError = await setBusinessReaction(
-        supabase,
-        {
-          messageId: targetMessage.id,
-          conversationId: targetMessage.conversation_id,
-        },
-        userId,
-        emoji,
-      );
 
-      if (upsertError) {
-        console.error('[whatsapp/react] DB upsert failed:', upsertError.message);
+      const accessToken = decrypt(config.access_token);
+
+      try {
+        await sendReactionMessage({
+          phoneNumberId: config.phone_number_id,
+          accessToken,
+          to: sendTarget.target,
+          targetMessageId: targetMessage.message_id,
+          emoji,
+        });
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : t('react.unknownMetaError');
+
+        console.error('[whatsapp/react] Meta send failed:', message);
+
         return NextResponse.json(
-          { error: t('react.dbUpsertFailed') },
-          { status: 500 },
+          { error: t('react.metaError', { message }) },
+          { status: 502 }
         );
       }
-    }
 
-    return NextResponse.json({ success: true });
+      // Mirror into DB. Empty emoji = removal.
+      if (emoji === '') {
+        const delError = await removeBusinessReaction(
+          supabase,
+          targetMessage.id
+        );
+
+        if (delError) {
+          console.error('[whatsapp/react] DB delete failed:', delError.message);
+
+          return NextResponse.json(
+            { error: t('react.dbDeleteFailed') },
+            { status: 500 }
+          );
+        }
+      } else {
+        const upsertError = await setBusinessReaction(
+          supabase,
+          {
+            messageId: targetMessage.id,
+            conversationId: targetMessage.conversation_id,
+          },
+          userId,
+          emoji
+        );
+
+        if (upsertError) {
+          console.error(
+            '[whatsapp/react] DB upsert failed:',
+            upsertError.message
+          );
+
+          return NextResponse.json(
+            { error: t('react.dbUpsertFailed') },
+            { status: 500 }
+          );
+        }
+      }
+
+      return NextResponse.json({ success: true });
+    });
   } catch (error) {
     // requireRole throws Unauthorized/Forbidden; toErrorResponse maps
     // those to 401/403 and collapses anything else to a generic 500.
     console.error('Error in WhatsApp react POST:', error);
+
     return toErrorResponse(error);
   }
 }

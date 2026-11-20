@@ -27,6 +27,7 @@ async function assertContactAndTagOwnership(
   if (!isUuid(input.contactId)) {
     throw new ContactTagWriteError(t('tags.invalidContactId'), 400);
   }
+
   if (!isUuid(input.tagId)) {
     throw new ContactTagWriteError(t('tags.invalidTagId'), 400);
   }
@@ -49,9 +50,11 @@ async function assertContactAndTagOwnership(
   if (contactResult.error || tagResult.error) {
     throw new ContactTagWriteError(t('tags.verifyFailed'));
   }
+
   if (!contactResult.data) {
     throw new ContactTagWriteError(t('tags.contactNotFound'), 404);
   }
+
   if (!tagResult.data) {
     throw new ContactTagWriteError(t('tags.tagNotFound'), 404);
   }
@@ -75,11 +78,13 @@ export async function addContactTagIfAbsent(
     .maybeSingle();
 
   if (error?.code === '23505') return false;
+
   if (error) {
     throw new ContactTagWriteError(
       t('tags.addFailed', { message: error.message })
     );
   }
+
   return true;
 }
 

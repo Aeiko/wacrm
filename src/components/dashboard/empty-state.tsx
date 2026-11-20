@@ -2,7 +2,7 @@ import { BarChart3 } from 'lucide-react'
 import type { ComponentType } from 'react'
 import { cn } from '@/lib/utils'
 
-import { useTranslations } from 'next-intl'
+import { useTranslations } from 'use-intl'
 
 /**
  * Shared empty-state panel for charts that can't render meaningfully

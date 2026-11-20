@@ -5,9 +5,10 @@ export interface AssignmentResult {
 
 export function resolveAssignmentResult(
   requestedAgentId: string | null,
-  storedAgentId: string | null | undefined,
+  storedAgentId: string | null | undefined
 ): AssignmentResult {
   const assignedAgentId = storedAgentId ?? null;
+
   return {
     assignedAgentId,
     rejected: assignedAgentId !== requestedAgentId,

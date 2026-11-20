@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { useState } from 'react'
 import { AlertTriangle, GitBranch } from 'lucide-react'
-import { useFormatter, useTranslations } from 'next-intl'
+import { useFormatter, useTranslations } from 'use-intl'
 
 import { buttonVariants } from '@/components/ui/button'
 import {

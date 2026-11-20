@@ -26,7 +26,7 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { toast } from 'sonner';
-import { useTranslations } from 'next-intl';
+import { useTranslations } from 'use-intl';
 import {
   AlertTriangle,
   CheckCircle,
@@ -83,12 +83,14 @@ export default function JoinPage() {
   const tRoles = useTranslations('Settings.roles');
 
   const [peek, setPeek] = useState<PeekResult | null>(null);
+
   // Local auth probe — the AuthProvider lives inside the (dashboard)
   // route group, so it doesn't reach this page. We hit Supabase
   // directly the same way `/login` and `/signup` do.
   const [authedUserId, setAuthedUserId] = useState<string | null | undefined>(
-    undefined, // undefined = unknown / still loading; null = signed out
+    undefined // undefined = unknown / still loading; null = signed out
   );
+
   const [accepting, setAccepting] = useState(false);
   // `redeem_invitation` returns 409 when the caller's current account
   // has domain data, or they're already a member of a shared account.
@@ -103,6 +105,7 @@ export default function JoinPage() {
     if (!token) return;
     setPeek(null);
     setAuthedUserId(undefined);
+
     try {
       const [peekRes, authRes] = await Promise.all([
         fetch(`/api/invitations/${encodeURIComponent(token)}/peek`, {
@@ -110,10 +113,12 @@ export default function JoinPage() {
         }),
         createClient().auth.getUser(),
       ]);
+
       const peekBody = toPeekResult(
         peekRes.status,
-        await peekRes.json().catch(() => null),
+        await peekRes.json().catch(() => null)
       );
+
       setPeek(peekBody);
       setAuthedUserId(authRes.data.user?.id ?? null);
     } catch (err) {
@@ -138,20 +143,24 @@ export default function JoinPage() {
           }),
           createClient().auth.getUser(),
         ]);
+
         const peekBody = toPeekResult(
           peekRes.status,
-          await peekRes.json().catch(() => null),
+          await peekRes.json().catch(() => null)
         );
+
         if (cancelled) return;
         setPeek(peekBody);
         setAuthedUserId(authRes.data.user?.id ?? null);
       } catch (err) {
         console.error('[join] peek error:', err);
+
         if (cancelled) return;
         setPeek({ ok: false, reason: 'server_error' });
         setAuthedUserId(null);
       }
     })();
+
     return () => {
       cancelled = true;
     };
@@ -160,15 +169,18 @@ export default function JoinPage() {
   const handleAccept = useCallback(async () => {
     if (!token) return;
     setAccepting(true);
+
     try {
       const res = await fetch(
         `/api/invitations/${encodeURIComponent(token)}/redeem`,
-        { method: 'POST' },
+        { method: 'POST' }
       );
+
       if (!res.ok) {
         const payload = (await res.json().catch(() => ({}))) as {
           error?: string;
         };
+
         // 409 = caller already has data / is in another shared
         // account. The redeem RPC's error message is descriptive
         // enough to show directly; we open a modal so the user has
@@ -179,9 +191,12 @@ export default function JoinPage() {
         } else {
           toast.error(payload.error || t('acceptFailed'));
         }
+
         setAccepting(false);
+
         return;
       }
+
       toast.success(t('welcome'));
       // Full reload (not router.push) so AuthProvider re-fetches
       // the profile with the new account_id and account_role.
@@ -195,6 +210,7 @@ export default function JoinPage() {
 
   const handleSignOutAndRetry = useCallback(async () => {
     setSigningOut(true);
+
     try {
       await createClient().auth.signOut();
       // Hard reload so the new auth state propagates everywhere
@@ -211,10 +227,10 @@ export default function JoinPage() {
   // ----- Loading state (peek pending OR auth not yet resolved) -----
   if (peek === null || authedUserId === undefined) {
     return (
-      <Card className="w-full max-w-md border-border bg-card">
+      <Card className="border-border bg-card w-full max-w-md">
         <CardContent className="flex flex-col items-center gap-3 py-12">
-          <Loader2 className="size-6 animate-spin text-primary" />
-          <p className="text-sm text-muted-foreground">{t('verifying')}</p>
+          <Loader2 className="text-primary size-6 animate-spin" />
+          <p className="text-muted-foreground text-sm">{t('verifying')}</p>
         </CardContent>
       </Card>
     );
@@ -223,13 +239,14 @@ export default function JoinPage() {
   // ----- Peek failed -----
   if (!peek.ok) {
     const failKey = FAIL_KEY[peek.reason];
+
     return (
-      <Card className="w-full max-w-md border-border bg-card">
+      <Card className="border-border bg-card w-full max-w-md">
         <CardHeader className="items-center text-center">
           <div className="mb-2 flex h-12 w-12 items-center justify-center rounded-xl bg-red-500/10">
             <MailX className="h-6 w-6 text-red-400" />
           </div>
-          <CardTitle className="text-xl text-foreground">
+          <CardTitle className="text-foreground text-xl">
             {t(`fail.${failKey}Title`)}
           </CardTitle>
           <CardDescription className="text-muted-foreground">
@@ -248,14 +265,14 @@ export default function JoinPage() {
             <>
               <Button
                 onClick={loadPeekAndAuth}
-                className="w-full bg-primary text-primary-foreground hover:bg-primary/90"
+                className="bg-primary text-primary-foreground hover:bg-primary/90 w-full"
               >
                 {t('tryAgain')}
               </Button>
               <Link href="/signup">
                 <Button
                   variant="outline"
-                  className="w-full border-border text-muted-foreground hover:bg-muted hover:text-foreground"
+                  className="border-border text-muted-foreground hover:bg-muted hover:text-foreground w-full"
                 >
                   {t('createNewAccount')}
                 </Button>
@@ -264,14 +281,14 @@ export default function JoinPage() {
           ) : (
             <>
               <Link href="/signup">
-                <Button className="w-full bg-primary text-primary-foreground hover:bg-primary/90">
+                <Button className="bg-primary text-primary-foreground hover:bg-primary/90 w-full">
                   {t('createNewAccount')}
                 </Button>
               </Link>
               <Link href="/login">
                 <Button
                   variant="outline"
-                  className="w-full border-border text-muted-foreground hover:bg-muted hover:text-foreground"
+                  className="border-border text-muted-foreground hover:bg-muted hover:text-foreground w-full"
                 >
                   {t('signIn')}
                 </Button>
@@ -286,10 +303,10 @@ export default function JoinPage() {
   // ----- Peek OK -----
   const inviteHeader = (
     <CardHeader className="items-center text-center">
-      <div className="mb-2 flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10">
-        <UsersRound className="h-6 w-6 text-primary" />
+      <div className="bg-primary/10 mb-2 flex h-12 w-12 items-center justify-center rounded-xl">
+        <UsersRound className="text-primary h-6 w-6" />
       </div>
-      <CardTitle className="text-xl text-foreground">
+      <CardTitle className="text-foreground text-xl">
         {t.rich('invitedTo', {
           name: peek.account_name,
           account: (chunks) => <span className="text-primary">{chunks}</span>,
@@ -304,8 +321,8 @@ export default function JoinPage() {
             day: 'numeric',
           }),
           badge: (chunks) => (
-            <span className="inline-flex items-center gap-1 text-foreground">
-              <ShieldCheck className="size-3.5 text-primary" />
+            <span className="text-foreground inline-flex items-center gap-1">
+              <ShieldCheck className="text-primary size-3.5" />
               {chunks}
             </span>
           ),
@@ -318,13 +335,13 @@ export default function JoinPage() {
   if (authedUserId) {
     return (
       <>
-        <Card className="w-full max-w-md border-border bg-card">
+        <Card className="border-border bg-card w-full max-w-md">
           {inviteHeader}
           <CardContent className="flex flex-col gap-3">
             <Button
               onClick={handleAccept}
               disabled={accepting}
-              className="w-full bg-primary text-primary-foreground hover:bg-primary/90"
+              className="bg-primary text-primary-foreground hover:bg-primary/90 w-full"
             >
               {accepting ? (
                 <>
@@ -338,7 +355,7 @@ export default function JoinPage() {
                 </>
               )}
             </Button>
-            <p className="text-center text-xs text-muted-foreground">
+            <p className="text-muted-foreground text-center text-xs">
               {t('acceptNote', { name: peek.account_name })}
             </p>
           </CardContent>
@@ -356,7 +373,7 @@ export default function JoinPage() {
         >
           <DialogContent className="bg-popover border-border sm:max-w-md">
             <DialogHeader>
-              <DialogTitle className="flex items-center gap-2 text-popover-foreground">
+              <DialogTitle className="text-popover-foreground flex items-center gap-2">
                 <AlertTriangle className="size-4 text-amber-400" />
                 {t('conflictTitle', { name: peek.account_name })}
               </DialogTitle>
@@ -364,7 +381,7 @@ export default function JoinPage() {
                 {conflictMessage}
               </DialogDescription>
             </DialogHeader>
-            <div className="space-y-2 py-2 text-xs text-muted-foreground">
+            <div className="text-muted-foreground space-y-2 py-2 text-xs">
               <p>
                 {t.rich('conflictBody', {
                   name: peek.account_name,
@@ -405,18 +422,18 @@ export default function JoinPage() {
 
   // ----- Not authed: prompt to sign up or sign in -----
   return (
-    <Card className="w-full max-w-md border-border bg-card">
+    <Card className="border-border bg-card w-full max-w-md">
       {inviteHeader}
       <CardContent className="flex flex-col gap-2">
         <Link href={`/signup?invite=${encodeURIComponent(token!)}`}>
-          <Button className="w-full bg-primary text-primary-foreground hover:bg-primary/90">
+          <Button className="bg-primary text-primary-foreground hover:bg-primary/90 w-full">
             {t('createAndJoin')}
           </Button>
         </Link>
         <Link href={`/login?invite=${encodeURIComponent(token!)}`}>
           <Button
             variant="outline"
-            className="w-full border-border text-muted-foreground hover:bg-muted hover:text-foreground"
+            className="border-border text-muted-foreground hover:bg-muted hover:text-foreground w-full"
           >
             {t('haveAccount')}
           </Button>

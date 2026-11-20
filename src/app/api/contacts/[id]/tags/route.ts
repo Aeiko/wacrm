@@ -18,6 +18,7 @@ async function readTagId(request: Request): Promise<string | null> {
   const body = (await request.json().catch(() => null)) as {
     tag_id?: unknown;
   } | null;
+
   return typeof body?.tag_id === 'string' && body.tag_id.trim()
     ? body.tag_id.trim()
     : null;
@@ -31,8 +32,12 @@ export async function POST(
     const ctx = await requireRole('agent');
     const { id: contactId } = await params;
     const tagId = await readTagId(request);
+
     if (!tagId) {
-      return NextResponse.json({ error: t('contacts.tagIdRequired') }, { status: 400 });
+      return NextResponse.json(
+        { error: t('contacts.tagIdRequired') },
+        { status: 400 }
+      );
     }
 
     const result = await addContactTagAndDispatch({
@@ -47,6 +52,7 @@ export async function POST(
     if (error instanceof ContactTagWriteError) {
       return tagWriteErrorResponse(error);
     }
+
     return toErrorResponse(error);
   }
 }
@@ -59,8 +65,12 @@ export async function DELETE(
     const ctx = await requireRole('agent');
     const { id: contactId } = await params;
     const tagId = await readTagId(request);
+
     if (!tagId) {
-      return NextResponse.json({ error: t('contacts.tagIdRequired') }, { status: 400 });
+      return NextResponse.json(
+        { error: t('contacts.tagIdRequired') },
+        { status: 400 }
+      );
     }
 
     await removeContactTag(ctx.supabase, {
@@ -74,6 +84,7 @@ export async function DELETE(
     if (error instanceof ContactTagWriteError) {
       return tagWriteErrorResponse(error);
     }
+
     return toErrorResponse(error);
   }
 }

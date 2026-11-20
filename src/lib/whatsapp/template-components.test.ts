@@ -16,9 +16,7 @@ describe('buildMetaTemplatePayload', () => {
       name: 'order_confirmation',
       category: 'UTILITY',
       language: 'en_US',
-      components: [
-        { type: 'BODY', text: 'Your order is on its way.' },
-      ],
+      components: [{ type: 'BODY', text: 'Your order is on its way.' }],
     });
   });
 
@@ -28,6 +26,7 @@ describe('buildMetaTemplatePayload', () => {
       body_text: 'Hi {{1}}, order {{2}}.',
       sample_values: { body: ['John', 'ORD-42'] },
     });
+
     const body = payload.components.find((c) => c.type === 'BODY');
     expect(body?.example?.body_text).toEqual([['John', 'ORD-42']]);
   });
@@ -39,6 +38,7 @@ describe('buildMetaTemplatePayload', () => {
       header_content: 'Hello {{1}}',
       sample_values: { header: ['Sara'] },
     });
+
     expect(payload.components[0]).toEqual({
       type: 'HEADER',
       format: 'TEXT',
@@ -53,6 +53,7 @@ describe('buildMetaTemplatePayload', () => {
       header_type: 'image',
       header_media_url: 'https://example.com/img.jpg',
     });
+
     expect(payload.components[0]).toEqual({
       type: 'HEADER',
       format: 'IMAGE',
@@ -67,6 +68,7 @@ describe('buildMetaTemplatePayload', () => {
       header_handle: '4::aW1...',
       header_media_url: 'https://example.com/v.mp4',
     });
+
     expect(payload.components[0]).toEqual({
       type: 'HEADER',
       format: 'VIDEO',
@@ -79,14 +81,21 @@ describe('buildMetaTemplatePayload', () => {
       ...base,
       footer_text: 'Reply STOP to opt out',
     });
+
     expect(
       withFooter.components.some(
-        (c) => c.type === 'FOOTER' && c.text === 'Reply STOP to opt out',
-      ),
+        (c) => c.type === 'FOOTER' && c.text === 'Reply STOP to opt out'
+      )
     ).toBe(true);
 
-    const withoutFooter = buildMetaTemplatePayload({ ...base, footer_text: '' });
-    expect(withoutFooter.components.some((c) => c.type === 'FOOTER')).toBe(false);
+    const withoutFooter = buildMetaTemplatePayload({
+      ...base,
+      footer_text: '',
+    });
+
+    expect(withoutFooter.components.some((c) => c.type === 'FOOTER')).toBe(
+      false
+    );
   });
 
   it('emits the buttons component with correct per-type fields', () => {
@@ -99,6 +108,7 @@ describe('buildMetaTemplatePayload', () => {
         { type: 'COPY_CODE', text: 'Copy', example: 'SUMMER20' },
       ],
     });
+
     const buttons = payload.components.find((c) => c.type === 'BUTTONS');
     expect(buttons?.buttons).toEqual([
       { type: 'QUICK_REPLY', text: 'Yes' },
@@ -116,6 +126,7 @@ describe('buildMetaTemplatePayload', () => {
       footer_text: 'Footer',
       buttons: [{ type: 'QUICK_REPLY', text: 'Yes' }],
     });
+
     expect(payload.components.map((c) => c.type)).toEqual([
       'HEADER',
       'BODY',

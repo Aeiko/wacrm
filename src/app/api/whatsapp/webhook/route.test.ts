@@ -1,4 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { postOutcomes } from '@/lib/whatsapp/coexistence/post-outcomes';
+import { createHmac } from 'node:crypto';
+import { createServer } from 'node:http';
+import { once } from 'node:events';
+import type { JsonValue } from '@/lib/whatsapp/coexistence/payload';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Shared, hoisted state the module mocks close over. Reset per test.
 const h = vi.hoisted(() => ({
@@ -12,6 +17,24 @@ const h = vi.hoisted(() => ({
     // Result the message upsert's .select() resolves to. A genuine insert
     // returns the row; a replayed delivery conflicts and returns [].
     messageUpsertResult: [{ id: 'msg-1' }] as { id: string }[],
+    // SAFETY: null initializes the declared mutable stored-row test state.
+    historyRow: null as {
+      id: string;
+      conversation_id: string;
+      message_id: string;
+      message_source: string;
+      sender_type: string;
+      content_type?: string;
+      content_text?: string | null;
+      media_url?: string | null;
+      media_type?: string | null;
+      status: string;
+      created_at?: string;
+      reply_to_message_id?: string | null;
+      interactive_reply_id?: string | null;
+    } | null,
+    // SAFETY: an empty list satisfies the concrete query-filter tuple contract.
+    promotionFilters: [] as [string, string][],
     firstInboundUnclaimed: true,
     firstInboundClaims: 0,
     /** Row `lookupInternalIdByMetaId` resolves for a `context.id`. */
@@ -26,9 +49,9 @@ const h = vi.hoisted(() => ({
     mirrorInboundMedia: true as boolean | undefined,
     /** Objects the inbound-media mirror pushed into chat-media. */
     storageUploads: [] as {
-      bucket: string
-      path: string
-      options: { contentType?: string }
+      bucket: string;
+      path: string;
+      options: { contentType?: string };
     }[],
     /** Error the next storage upload resolves with, if any. */
     storageUploadError: null as { message: string } | null,
@@ -39,21 +62,31 @@ const h = vi.hoisted(() => ({
     /** Patches applied to an existing `contacts` row. */
     contactUpdates: [] as Record<string, unknown>[],
     whatsappConfigLookups: [] as { columns: string; value: unknown }[],
-    /** broadcast_recipients row the status webhook targets. */
-    broadcastRecipient: null as { id: string; status: string } | null,
+    configWrites: new Array<{ verify_token: string }>(),
+    ingressResult: { status: 200, legacy_indices: [0], captured: 0, staged: 0 },
+    ingressCalls: new Array<Record<string, JsonValue>>(),
+    statusAccountFound: true,
+    recipientAccesses: 0,
+    // SAFETY: null initializes the optional stored broadcast-recipient fixture.
+    broadcastRecipient: null as {
+      id: string;
+      status: string;
+      account_id?: string;
+      whatsapp_message_id?: string;
+    } | null,
     /** Patches applied to that broadcast_recipients row. */
     recipientUpdates: [] as Record<string, unknown>[],
   },
-}))
+}));
 
 vi.mock('next/server', () => ({
   after: (cb: () => Promise<void> | void) => {
-    h.state.afterCallbacks.push(cb)
+    h.state.afterCallbacks.push(cb);
   },
   NextResponse: {
     json: (body: unknown, init?: { status?: number }) => ({ body, init }),
   },
-}))
+}));
 
 vi.mock('@supabase/supabase-js', () => ({
   createClient: () => ({
@@ -61,23 +94,60 @@ vi.mock('@supabase/supabase-js', () => ({
       switch (table) {
         case 'whatsapp_config':
           return {
-            select: (columns: string) => ({
-              eq: (_column: string, value: unknown) => {
-                h.state.whatsappConfigLookups.push({ columns, value })
-                return Promise.resolve({
-                  data: [
-                    {
-                      account_id: 'acc-1',
-                      user_id: 'user-1',
-                      access_token: 'enc',
-                      mirror_inbound_media: h.state.mirrorInboundMedia,
-                    },
-                  ],
+            update: (patch: { verify_token: string }) => {
+              h.state.configWrites.push(patch);
+
+              return { eq: () => Promise.resolve({ error: null }) };
+            },
+            select: (columns: string) => {
+              const row = {
+                id: 'config-1',
+                account_id: 'acc-1',
+                user_id: 'user-1',
+                phone_number_id: '1234',
+                access_token: 'enc',
+                verify_token: 'legacy-ciphertext',
+                status: 'connected',
+                coexistence_app_id: null,
+                coexistence_generation: 'epoch-1',
+                mirror_inbound_media: h.state.mirrorInboundMedia,
+              };
+
+              const chain = Object.assign(
+                Promise.resolve({
+                  data:
+                    columns === 'account_id' && !h.state.statusAccountFound
+                      ? []
+                      : [row],
                   error: null,
-                })
-              },
+                }),
+                {
+                  eq: (_column: string, value: unknown) => {
+                    h.state.whatsappConfigLookups.push({ columns, value });
+
+                    return chain;
+                  },
+                  single: async () => ({ data: row, error: null }),
+                  not: () => ({
+                    limit: async () => ({ data: [], error: null }),
+                  }),
+                }
+              );
+
+              return chain;
+            },
+          };
+        case 'profiles':
+          return {
+            select: () => ({
+              eq: () => ({
+                single: async () => ({
+                  data: { account_id: 'acc-1' },
+                  error: null,
+                }),
+              }),
             }),
-          }
+          };
         case 'conversations':
           // findOrCreateConversation: select().eq().eq().order().limit()
           return {
@@ -98,46 +168,92 @@ vi.mock('@supabase/supabase-js', () => ({
               eq: () => ({
                 is: () => ({
                   select: () => {
-                    h.state.firstInboundClaims++
-                    const won = h.state.firstInboundUnclaimed
-                    h.state.firstInboundUnclaimed = false
+                    h.state.firstInboundClaims++;
+                    const won = h.state.firstInboundUnclaimed;
+                    h.state.firstInboundUnclaimed = false;
+
                     return Promise.resolve({
                       data: won ? [{ id: 'conv-1' }] : [],
                       error: null,
-                    })
+                    });
                   },
                 }),
               }),
             }),
-          }
+          };
         case 'broadcast_recipients':
+          h.state.recipientAccesses++;
+
           return {
-            select: () => ({
-              eq: () => ({
-                eq: () => ({
-                  order: () => ({
-                    limit: () =>
-                      Promise.resolve({ data: [], error: null }),
-                  }),
+            select: () => {
+              const filters: Record<string, string> = {};
+
+              const chain = Object.assign(
+                Promise.resolve().then(() => {
+                  const row = h.state.broadcastRecipient;
+
+                  const matches =
+                    row &&
+                    (row.account_id ?? 'acc-1') ===
+                      filters['broadcasts.account_id'] &&
+                    (row.whatsapp_message_id ?? 'wamid.OUT1') ===
+                      filters.whatsapp_message_id;
+
+                  return {
+                    data: matches ? [{ id: row.id }] : [],
+                    error: null,
+                  };
                 }),
-              }),
-            }),
-            update: (patch: Record<string, unknown>) => ({
-              eq: () => ({
-                in: (_column: string, allowed: string[]) => ({
-                  select: () => {
-                    const row = h.state.broadcastRecipient
-                    const matches = !!row && allowed.includes(row.status)
-                    if (matches) h.state.recipientUpdates.push(patch)
-                    return Promise.resolve({
-                      data: matches ? [{ id: row!.id }] : [],
-                      error: null,
-                    })
+                {
+                  eq: (column: string, value: string) => {
+                    filters[column] = value;
+
+                    return chain;
                   },
-                }),
-              }),
-            }),
-          }
+                  order: () => ({
+                    limit: () => Promise.resolve({ data: [], error: null }),
+                  }),
+                }
+              );
+
+              return chain;
+            },
+            update: (patch: Record<string, string>) => {
+              let ids: string[] = [];
+              let allowed: string[] = [];
+
+              const chain = {
+                eq: (_column: string, id: string) => {
+                  ids = [id];
+
+                  return chain;
+                },
+                in: (column: string, values: string[]) => {
+                  if (column === 'id') ids = values;
+                  else allowed = values;
+
+                  return chain;
+                },
+                select: () => {
+                  const row = h.state.broadcastRecipient;
+
+                  const matches =
+                    !!row &&
+                    ids.includes(row.id) &&
+                    allowed.includes(row.status);
+
+                  if (matches) h.state.recipientUpdates.push(patch);
+
+                  return Promise.resolve({
+                    data: matches ? [{ id: row!.id }] : [],
+                    error: null,
+                  });
+                },
+              };
+
+              return chain;
+            },
+          };
         case 'contacts':
           // Three chains land here, all from findOrCreateContact:
           //   findContactByWaUserId: select('*').eq().eq().maybeSingle()
@@ -156,7 +272,8 @@ vi.mock('@supabase/supabase-js', () => ({
               }),
             }),
             update: (patch: Record<string, unknown>) => {
-              h.state.contactUpdates.push(patch)
+              h.state.contactUpdates.push(patch);
+
               return {
                 eq: () => ({
                   select: () => ({
@@ -164,10 +281,11 @@ vi.mock('@supabase/supabase-js', () => ({
                       Promise.resolve({ data: null, error: null }),
                   }),
                 }),
-              }
+              };
             },
             insert: (row: Record<string, unknown>) => {
-              h.state.contactInserts.push(row)
+              h.state.contactInserts.push(row);
+
               return {
                 select: () => ({
                   single: () =>
@@ -176,9 +294,9 @@ vi.mock('@supabase/supabase-js', () => ({
                       error: null,
                     }),
                 }),
-              }
+              };
             },
-          }
+          };
         case 'messages':
           return {
             // lookupInternalIdByMetaId: select('id').eq().eq().maybeSingle()
@@ -193,25 +311,100 @@ vi.mock('@supabase/supabase-js', () => ({
                 }),
               }),
             }),
+            update: (patch: {
+              message_source: string;
+              content_type?: string;
+              content_text?: string | null;
+              media_url?: string | null;
+              media_type?: string | null;
+              status?: string;
+              created_at?: string;
+              reply_to_message_id?: string | null;
+              interactive_reply_id?: string | null;
+            }) => {
+              const filters: [string, string][] = [];
+              let allowedStatuses: string[] | null = null;
+
+              const query = {
+                eq: (column: string, value: string) => {
+                  filters.push([column, value]);
+
+                  return query;
+                },
+                in: (_column: string, values: string[]) => {
+                  allowedStatuses = values;
+
+                  return query;
+                },
+                select: () => {
+                  h.state.promotionFilters = filters;
+
+                  const row = h.state.historyRow;
+
+                  const matches =
+                    row &&
+                    (!allowedStatuses ||
+                      allowedStatuses.includes(row.status)) &&
+                    filters.every(([column, value]) =>
+                      Object.entries(row).some(
+                        ([key, stored]) => key === column && stored === value
+                      )
+                    );
+
+                  if (matches) Object.assign(row, patch);
+
+                  return Promise.resolve({
+                    data: matches ? [{ id: row.id }] : [],
+                    error: null,
+                  });
+                },
+              };
+
+              return query;
+            },
             // Idempotent insert: upsert(...).select('id')
             upsert: (row: Record<string, unknown>, options: unknown) => {
-              h.state.upsertCalls.push({ row, options })
+              h.state.upsertCalls.push({ row, options });
+
               return {
                 select: () =>
                   Promise.resolve({
                     data: h.state.messageUpsertResult,
                     error: null,
                   }),
-              }
+              };
             },
-          }
+          };
         default:
-          throw new Error(`unexpected table: ${table}`)
+          throw new Error(`unexpected table: ${table}`);
       }
     },
-    rpc: (name: string, args: Record<string, unknown>) => {
-      h.state.rpcCalls.push({ name, args })
-      return Promise.resolve({ data: null, error: null })
+    rpc: (name: string, args: Record<string, JsonValue>) => {
+      if (name === 'coexistence_ingress')
+        return {
+          retry: (enabled: boolean) => {
+            expect(enabled).toBe(false);
+
+            h.state.ingressCalls.push(args);
+
+            return Promise.resolve({
+              data: h.state.ingressResult,
+              error: null,
+            });
+          },
+        };
+
+      h.state.rpcCalls.push({ name, args });
+
+      return Promise.resolve({
+        data:
+          name === 'coexistence_is_private_media'
+            ? false
+            : name === 'coexistence_signup_media_allowed'
+              ? true
+              : null,
+        error: null,
+      });
     },
     // Service-role Storage, used by the inbound-media mirror (#466).
     storage: {
@@ -220,29 +413,32 @@ vi.mock('@supabase/supabase-js', () => ({
           upload: (
             path: string,
             _body: unknown,
-            options: { contentType?: string },
+            options: { contentType?: string }
           ) => {
-            h.state.storageUploads.push({ bucket, path, options })
-            return Promise.resolve({ error: h.state.storageUploadError })
+            h.state.storageUploads.push({ bucket, path, options });
+
+            return Promise.resolve({ error: h.state.storageUploadError });
           },
           getPublicUrl: (path: string) => ({
             data: { publicUrl: `https://cdn.test/${bucket}/${path}` },
           }),
-        }
+        };
       },
     },
   }),
-}))
+}));
 
 vi.mock('@/lib/whatsapp/encryption', () => ({
   decrypt: () => 'plain-token',
   encrypt: (v: string) => v,
-  isLegacyFormat: () => false,
-}))
+  isLegacyFormat: () => true,
+}));
+
 vi.mock('@/lib/whatsapp/meta-api', () => ({
   getMediaUrl: vi.fn(),
   downloadMedia: vi.fn(),
-}))
+}));
+
 vi.mock('@/lib/contacts/dedupe', () => ({
   findExistingContact: vi.fn(async () => ({
     id: 'contact-1',
@@ -250,42 +446,44 @@ vi.mock('@/lib/contacts/dedupe', () => ({
     phone: '15551230000',
   })),
   isUniqueViolation: () => false,
-}))
+}));
 
-vi.mock('@/lib/whatsapp/webhook-signature', () => ({
-  verifyMetaWebhookSignature: () => true,
-}))
 vi.mock('@/lib/whatsapp/template-webhook', () => ({
   isTemplateWebhookField: (field: string) =>
     field.startsWith('message_template_'),
   handleTemplateWebhookChange: vi.fn(),
-}))
+}));
+
 vi.mock('@/lib/automations/engine', () => ({
   runAutomationsForTrigger: h.runAutomationsForTrigger,
   resumeAwaitingReply: h.resumeAwaitingReply,
-}))
+}));
+
 vi.mock('@/lib/flows/engine', () => ({
   dispatchInboundToFlows: h.dispatchInboundToFlows,
-}))
+}));
+
 vi.mock('@/lib/ai/auto-reply', () => ({
   dispatchInboundToAiReply: h.dispatchInboundToAiReply,
-}))
+}));
+
 vi.mock('@/lib/webhooks/deliver', () => ({
   dispatchWebhookEvent: h.dispatchWebhookEvent,
-}))
+}));
+
 vi.mock('@/lib/whatsapp/message-status-sync', () => ({
   applyMessageStatus: h.applyMessageStatus,
-}))
+}));
 
-import { POST } from './route'
-import { getMediaUrl, downloadMedia } from '@/lib/whatsapp/meta-api'
-import { findExistingContact } from '@/lib/contacts/dedupe'
-import { handleTemplateWebhookChange } from '@/lib/whatsapp/template-webhook'
-import { MAX_WEBHOOK_BODY_BYTES } from '@/lib/whatsapp/webhook-body'
+import { GET, POST } from './route';
+import { getMediaUrl, downloadMedia } from '@/lib/whatsapp/meta-api';
+import { findExistingContact } from '@/lib/contacts/dedupe';
+import { handleTemplateWebhookChange } from '@/lib/whatsapp/template-webhook';
+import { MAX_WEBHOOK_BODY_BYTES } from '@/lib/whatsapp/webhook-body';
 
-const mockGetMediaUrl = vi.mocked(getMediaUrl)
-const mockDownloadMedia = vi.mocked(downloadMedia)
-const mockFindExistingContact = vi.mocked(findExistingContact)
+const mockGetMediaUrl = vi.mocked(getMediaUrl);
+const mockDownloadMedia = vi.mocked(downloadMedia);
+const mockFindExistingContact = vi.mocked(findExistingContact);
 
 const TEXT_MESSAGE = {
   id: 'wamid.TEST1',
@@ -293,21 +491,23 @@ const TEXT_MESSAGE = {
   timestamp: '1700000000',
   type: 'text',
   text: { body: 'hello' },
-}
+};
 
-const LEGACY_CONTACTS = [{ wa_id: '15551230000', profile: { name: 'Ada' } }]
+const LEGACY_CONTACTS = [{ wa_id: '15551230000', profile: { name: 'Ada' } }];
 
-function signedPost(body: BodyInit) {
+function signedPost(body: string, secret = 'legacy-secret') {
   return new Request('http://localhost/api/whatsapp/webhook', {
     method: 'POST',
-    headers: { 'x-hub-signature-256': 'sha256=stub' },
+    headers: {
+      'x-hub-signature-256': `sha256=${createHmac('sha256', secret).update(body).digest('hex')}`,
+    },
     body,
-  })
+  });
 }
 
 function inboundRequest(
   message: Record<string, unknown> = TEXT_MESSAGE,
-  contacts: Record<string, unknown>[] = LEGACY_CONTACTS,
+  contacts: Record<string, unknown>[] = LEGACY_CONTACTS
 ) {
   const body = {
     entry: [
@@ -324,18 +524,21 @@ function inboundRequest(
         ],
       },
     ],
-  }
-  return signedPost(JSON.stringify(body))
+  };
+
+  return signedPost(JSON.stringify(body));
 }
 
 async function runWebhook(
   message?: Record<string, unknown>,
-  contacts?: Record<string, unknown>[],
+  contacts?: Record<string, unknown>[]
 ) {
-  const res = await POST(inboundRequest(message, contacts))
+  const res = await POST(inboundRequest(message, contacts));
+
   // Drain the after() callback exactly as the runtime would.
-  for (const cb of h.state.afterCallbacks) await cb()
-  return res
+  for (const cb of h.state.afterCallbacks) await cb();
+
+  return res;
 }
 
 /** A message-status webhook (sent / delivered / read / failed). */
@@ -354,107 +557,870 @@ async function runStatusWebhook(status: Record<string, unknown>) {
         ],
       },
     ],
-  }
-  const res = await POST(signedPost(JSON.stringify(body)))
-  for (const cb of h.state.afterCallbacks) await cb()
-  return res
+  };
+
+  const res = await POST(signedPost(JSON.stringify(body)));
+
+  for (const cb of h.state.afterCallbacks) await cb();
+
+  return res;
 }
 
 beforeEach(() => {
-  vi.clearAllMocks()
-  h.state.messageUpsertResult = [{ id: 'msg-1' }]
-  h.state.firstInboundUnclaimed = true
-  h.state.firstInboundClaims = 0
-  h.state.replyContextParent = null
-  h.state.conversation = { id: 'conv-1', unread_count: 0, account_id: 'acc-1' }
-  h.state.upsertCalls = []
-  h.state.rpcCalls = []
-  h.state.afterCallbacks = []
-  h.state.automationStarted = 0
-  h.state.automationCompleted = 0
-  h.state.mirrorInboundMedia = true
-  h.state.storageUploads = []
-  h.state.storageUploadError = null
-  h.state.contactByWaUserId = null
-  h.state.contactInserts = []
-  h.state.contactUpdates = []
-  h.state.whatsappConfigLookups = []
-  h.state.broadcastRecipient = null
-  h.state.recipientUpdates = []
+  vi.clearAllMocks();
+  vi.stubEnv('META_APP_SECRET', 'legacy-secret');
+  vi.stubEnv('WHATSAPP_COEXISTENCE_APP_ID', '9999');
+  vi.stubEnv('WHATSAPP_COEXISTENCE_APP_SECRET', 'dedicated-secret');
+  vi.stubEnv('WHATSAPP_COEXISTENCE_ENABLED', 'true');
+  vi.stubEnv('WHATSAPP_COEXISTENCE_WEBHOOK_VERIFY_TOKEN', '');
+  h.state.ingressResult = {
+    status: 200,
+    legacy_indices: [0],
+    captured: 0,
+    staged: 0,
+  };
+  h.state.ingressCalls = [];
+  h.state.messageUpsertResult = [{ id: 'msg-1' }];
+  h.state.historyRow = null;
+  h.state.promotionFilters = [];
+  h.state.firstInboundUnclaimed = true;
+  h.state.firstInboundClaims = 0;
+  h.state.replyContextParent = null;
+  h.state.conversation = { id: 'conv-1', unread_count: 0, account_id: 'acc-1' };
+  h.state.upsertCalls = [];
+  h.state.rpcCalls = [];
+  h.state.afterCallbacks = [];
+  h.state.automationStarted = 0;
+  h.state.automationCompleted = 0;
+  h.state.mirrorInboundMedia = true;
+  h.state.storageUploads = [];
+  h.state.storageUploadError = null;
+  h.state.contactByWaUserId = null;
+  h.state.contactInserts = [];
+  h.state.contactUpdates = [];
+  h.state.whatsappConfigLookups = [];
+  h.state.configWrites = [];
+  h.state.statusAccountFound = true;
+  h.state.recipientAccesses = 0;
+  h.state.broadcastRecipient = null;
+  h.state.recipientUpdates = [];
   mockFindExistingContact.mockResolvedValue({
     id: 'contact-1',
     name: 'Ada',
     phone: '15551230000',
-  })
+  });
   mockGetMediaUrl.mockResolvedValue({
     url: 'https://lookaside.fbsbx.com/whatsapp/abc',
     mimeType: 'image/jpeg',
     fileSize: 2048,
-  })
+  });
   mockDownloadMedia.mockResolvedValue({
     buffer: Buffer.alloc(2048),
     contentType: 'image/jpeg',
-  })
-  h.dispatchInboundToFlows.mockResolvedValue({ consumed: false })
-  h.resumeAwaitingReply.mockResolvedValue(false)
-  h.dispatchInboundToAiReply.mockResolvedValue(undefined)
-  h.dispatchWebhookEvent.mockResolvedValue(undefined)
-  h.applyMessageStatus.mockResolvedValue([])
+  });
+  h.dispatchInboundToFlows.mockResolvedValue({ consumed: false });
+  h.resumeAwaitingReply.mockResolvedValue(false);
+  h.dispatchInboundToAiReply.mockResolvedValue(undefined);
+  h.dispatchWebhookEvent.mockResolvedValue(undefined);
+  h.applyMessageStatus.mockResolvedValue([]);
   h.runAutomationsForTrigger.mockImplementation(() => {
-    h.state.automationStarted++
+    h.state.automationStarted++;
+
     return new Promise<void>((resolve) => {
       setTimeout(() => {
-        h.state.automationCompleted++
-        resolve()
-      }, 0)
-    })
-  })
-})
+        h.state.automationCompleted++;
+        resolve();
+      }, 0);
+    });
+  });
+});
+
+afterEach(() => vi.unstubAllEnvs());
+
+describe('dedicated receiver', () => {
+  const change = { field: 'messages', value: {} };
+  const entry = { id: '5678', changes: [change] };
+  const envelope = { object: 'whatsapp_business_account', entry: [entry] };
+  const payload = JSON.stringify(envelope);
+  const callback = 'https://crm.test/api/whatsapp/webhook';
+
+  const validQuery =
+    'hub.mode=subscribe&hub.challenge=007&hub.verify_token=app-token';
+
+  beforeEach(() => {
+    vi.stubEnv('WHATSAPP_COEXISTENCE_DEDICATED_RECEIVER', 'true');
+    vi.stubEnv(
+      'WHATSAPP_COEXISTENCE_PRIVATE_REST_ORIGIN',
+      'https://public.invalid'
+    );
+    vi.stubEnv('WHATSAPP_COEXISTENCE_PRIVATE_REST_TOKEN', 'fixture.only.token');
+    vi.stubEnv('WHATSAPP_COEXISTENCE_WEBHOOK_VERIFY_TOKEN', 'app-token');
+  });
+
+  it('echoes only the exact decoded opaque challenge with safe extra parameters', async () => {
+    const response = await GET(
+      new Request(
+        `${callback}?${validQuery.replace('007', '007-Ab%2B%2F%3D')}&trace.id=fixture`
+      )
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('007-Ab+/=');
+    expect(response.headers.get('content-type')).toBe(
+      'text/plain; charset=utf-8'
+    );
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(response.headers.get('cache-control')).toBe('no-store');
+  });
+
+  it.each([
+    ['missing challenge', validQuery.replace('&hub.challenge=007', '')],
+    ['duplicate mode', `${validQuery}&hub.mode=subscribe`],
+    ['duplicate encoded challenge key', `${validQuery}&hub%2Echallenge=007`],
+    ['duplicate token', `${validQuery}&hub.verify_token=app-token`],
+    ['markup', validQuery.replace('007', '%3Cmarkup%3E')],
+    ['control', validQuery.replace('007', 'opaque%0A')],
+    ['verification-token reflection', validQuery.replace('007', 'app-token')],
+    ['oversized challenge', validQuery.replace('007', 'a'.repeat(257))],
+    ['unsafe extra value', `${validQuery}&trace=%00`],
+    ['malformed encoding', `${validQuery}&trace=%`],
+    ['oversized extra value', `${validQuery}&trace=${'a'.repeat(4096)}`],
+  ])('rejects %s without echoing query data', async (_label, query) => {
+    expect(await GET(new Request(`${callback}?${query}`))).toEqual({
+      body: { error: 'Invalid verification parameters' },
+      init: { status: 400 },
+    });
+    expect(h.state.whatsappConfigLookups).toEqual([]);
+  });
+
+  it.each([
+    ['absent object', { entry: [entry] }],
+    ['wrong object', { ...envelope, object: 'page' }],
+    ['extra envelope field', { ...envelope, ignored: true }],
+    ['empty entry list', { ...envelope, entry: [] }],
+    [
+      'empty sibling entry',
+      { ...envelope, entry: [entry, { ...entry, changes: [] }] },
+    ],
+    ['missing WABA id', { ...envelope, entry: [{ changes: [change] }] }],
+    [
+      'extra entry field',
+      { ...envelope, entry: [{ ...entry, ignored: true }] },
+    ],
+    [
+      'extra change field',
+      {
+        ...envelope,
+        entry: [{ ...entry, changes: [{ ...change, ignored: true }] }],
+      },
+    ],
+    [
+      'non-object value',
+      {
+        ...envelope,
+        entry: [{ ...entry, changes: [{ ...change, value: null }] }],
+      },
+    ],
+    [
+      'unsupported field alone',
+      {
+        ...envelope,
+        entry: [{ ...entry, changes: [{ field: 'smb_unknown', value: {} }] }],
+      },
+    ],
+    [
+      'unsupported field beside supported change',
+      {
+        ...envelope,
+        entry: [
+          {
+            ...entry,
+            changes: [change, { field: 'unknown', value: { messages: [] } }],
+          },
+        ],
+      },
+    ],
+    [
+      'unsupported field in a second entry',
+      {
+        ...envelope,
+        entry: [
+          entry,
+          {
+            ...entry,
+            changes: [{ field: 'message_template_status_update', value: {} }],
+          },
+        ],
+      },
+    ],
+    [
+      'too many changes across entries',
+      {
+        ...envelope,
+        entry: [{ ...entry, changes: Array(1000).fill(change) }, entry],
+      },
+    ],
+  ])(
+    'authenticates before rejecting %s at the wire boundary',
+    async (_label, body) => {
+      const raw = JSON.stringify(body);
+
+      expect((await POST(signedPost(raw))).status).toBe(401);
+      expect((await POST(signedPost(raw, 'dedicated-secret'))).status).toBe(
+        400
+      );
+      expect(h.state.afterCallbacks).toEqual([]);
+    }
+  );
+
+  it('rejects even a valid legacy challenge token without a config read', async () => {
+    const response = await GET(
+      new Request(
+        'https://crm.test/api/whatsapp/webhook?hub.mode=subscribe&hub.challenge=007&hub.verify_token=plain-token'
+      )
+    );
+
+    expect(response).toMatchObject({ init: { status: 403 } });
+    expect(h.state.whatsappConfigLookups).toEqual([]);
+  });
+
+  it('counts early POST outcomes without logging verification or legacy traffic', async () => {
+    const info = vi.spyOn(postOutcomes, 'count').mockImplementation(() => {});
+
+    try {
+      expect((await POST(signedPost(payload))).status).toBe(401);
+      expect((await POST(signedPost('{}', 'dedicated-secret'))).status).toBe(
+        400
+      );
+      expect(
+        await POST(
+          new Request(callback, { method: 'POST', body: Uint8Array.of(0xff) })
+        )
+      ).toMatchObject({ init: { status: 400 } });
+      expect(
+        await POST(
+          new Request(callback, {
+            method: 'POST',
+            headers: { 'content-length': '4194305' },
+          })
+        )
+      ).toMatchObject({ init: { status: 413 } });
+      expect((await GET(new Request(`${callback}?${validQuery}`))).status).toBe(
+        200
+      );
+      vi.stubEnv('WHATSAPP_COEXISTENCE_DEDICATED_RECEIVER', 'false');
+      expect((await POST(signedPost(payload, 'wrong-secret'))).status).toBe(
+        401
+      );
+
+      expect(info.mock.calls).toEqual([
+        ['seen'],
+        ['auth_rejected'],
+        ['seen'],
+        ['invalid_delivery'],
+        ['seen'],
+        ['invalid_delivery'],
+        ['seen'],
+        ['invalid_delivery'],
+      ]);
+    } finally {
+      info.mockRestore();
+    }
+  });
+
+  it('uses the pinned RPC for both batch shapes and counts only accepted receipts as committed', async () => {
+    const info = vi.spyOn(postOutcomes, 'count').mockImplementation(() => {});
+    vi.stubEnv(
+      'WHATSAPP_COEXISTENCE_PRIVATE_REST_ORIGIN',
+      'http://127.0.0.1:3902'
+    );
+    const requests: string[] = [];
+    const batches: unknown[] = [];
+    const history = { field: 'history', value: { history: [] } };
+
+    const server = createServer((req, res) => {
+      requests.push(`${req.method} ${req.url} ${req.headers.authorization}`);
+      req.setEncoding('utf8');
+
+      let body = '';
+
+      req.on('data', (chunk: string) => {
+        body += chunk;
+      });
+      req.on('end', () => {
+        const { p_changes } = JSON.parse(body);
+
+        batches.push(p_changes);
+
+        if (requests.length === 1) {
+          res.writeHead(307, { Location: 'http://127.0.0.1:3902/never' }).end();
+
+          return;
+        }
+
+        res.end(
+          JSON.stringify({
+            status: requests.length === 3 ? 403 : 200,
+            legacy_indices: requests.length === 2 ? [0] : [],
+            captured: 0,
+            staged: p_changes.length,
+          })
+        );
+      });
+    });
+
+    server.listen(3902, '127.0.0.1');
+
+    try {
+      await once(server, 'listening');
+      expect((await POST(signedPost(payload, 'dedicated-secret'))).status).toBe(
+        503
+      );
+      expect((await POST(signedPost(payload, 'dedicated-secret'))).status).toBe(
+        503
+      );
+      expect((await POST(signedPost(payload, 'dedicated-secret'))).status).toBe(
+        403
+      );
+      expect((await POST(signedPost(payload, 'dedicated-secret'))).status).toBe(
+        200
+      );
+
+      const multi = JSON.stringify({
+        ...envelope,
+        entry: [entry, { id: '8765', time: 1700000000, changes: [history] }],
+      });
+
+      expect((await POST(signedPost(multi, 'dedicated-secret'))).status).toBe(
+        200
+      );
+      expect(requests).toEqual(
+        Array(5).fill('POST /rpc/coexistence_ingress Bearer fixture.only.token')
+      );
+      expect(batches[4]).toMatchObject([
+        {
+          entry_id: '5678',
+          ...change,
+          dedupe_key: expect.stringMatching(/:0:0$/),
+        },
+        {
+          entry_id: '8765',
+          ...history,
+          dedupe_key: expect.stringMatching(/:1:0$/),
+        },
+      ]);
+      expect(h.state.ingressCalls).toEqual([]);
+      expect(h.state.afterCallbacks).toEqual([]);
+      expect(info.mock.calls).toEqual(
+        [
+          'storage_failure',
+          'storage_failure',
+          'invalid_delivery',
+          'committed',
+          'committed',
+        ].flatMap((outcome) => [['seen'], [`${outcome}`]])
+      );
+    } finally {
+      info.mockRestore();
+      server.close();
+    }
+  });
+
+  it('rejects legacy signatures and fails closed on invalid private endpoint', async () => {
+    expect((await POST(signedPost(payload))).status).toBe(401);
+    expect((await POST(signedPost(payload, 'dedicated-secret'))).status).toBe(
+      503
+    );
+    expect(h.state.ingressCalls).toEqual([]);
+    expect(h.state.afterCallbacks).toEqual([]);
+  });
+});
+
+describe('webhook verification', () => {
+  it.each([
+    ['true', '9999', 'app-verify-token', 200],
+    ['true', '9999', 'wrong-token', 403],
+    ['false', '9999', 'app-verify-token', 403],
+    ['true', '', 'app-verify-token', 403],
+  ])(
+    'gates app verification (%s, %s, %s)',
+    async (enabled, appId, token, status) => {
+      vi.stubEnv('WHATSAPP_COEXISTENCE_ENABLED', enabled);
+      vi.stubEnv('WHATSAPP_COEXISTENCE_APP_ID', appId);
+      vi.stubEnv(
+        'WHATSAPP_COEXISTENCE_WEBHOOK_VERIFY_TOKEN',
+        'app-verify-token'
+      );
+
+      const response = await GET(
+        new Request(
+          `https://crm.test/api/whatsapp/webhook?hub.mode=subscribe&hub.challenge=007&hub.verify_token=${token}`
+        )
+      );
+
+      if (status === 200) {
+        expect(response.status).toBe(200);
+        expect(await response.text()).toBe('007');
+        expect(response.headers.get('content-type')).toBe('text/plain');
+        expect(h.state.whatsappConfigLookups).toEqual([]);
+      } else {
+        expect(response).toMatchObject({ init: { status } });
+      }
+
+      expect(h.state.configWrites).toEqual([]);
+    }
+  );
+
+  it('accepts a legacy token without rewriting connection credentials', async () => {
+    const response = await GET(
+      new Request(
+        'https://crm.test/api/whatsapp/webhook?hub.mode=subscribe&hub.challenge=verified&hub.verify_token=plain-token'
+      )
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('verified');
+    expect(h.state.configWrites).toEqual([]);
+  });
+});
+
+describe('private ingress legacy continuation authentication', () => {
+  it('rejects malformed UTF-8 even with a signature over replacement text', async () => {
+    const signed = '{"entry":[],"note":"\uFFFD"}';
+
+    const response = await POST(
+      new Request(signedPost(signed), {
+        method: 'POST',
+        body: Buffer.concat([
+          Buffer.from('{"entry":[],"note":"'),
+          Buffer.from([0xff]),
+          Buffer.from('"}'),
+        ]),
+      })
+    );
+
+    expect(response).toMatchObject({ init: { status: 400 } });
+    expect(h.state.ingressCalls).toEqual([]);
+  });
+
+  const legacyChange = {
+    field: 'message_template_status_update',
+    value: { event: 'APPROVED', message_template_id: '42' },
+  };
+
+  const privateChange = { field: 'smb_future', value: { private: true } };
+
+  const mixed = JSON.stringify({
+    entry: [{ id: '5678', changes: [privateChange, legacyChange] }],
+  });
+
+  it.each([
+    { field: 'history', value: {} },
+    { field: 'smb_app_state_sync', value: {} },
+    { field: 'smb_message_echoes', value: {} },
+    { field: 'account_update', value: {} },
+    { field: 'smb_unrecognized', value: {} },
+    { field: 'unknown', value: { messages: [] } },
+    { field: 'unknown', value: { statuses: [] } },
+    { field: 'unknown', value: { messages: null } },
+    { field: 'unknown', value: { statuses: 'not-an-array' } },
+  ])(
+    'rejects unsafe SQL legacy selection $field/$value before after()',
+    async (change) => {
+      const body = JSON.stringify({
+        entry: [{ id: '5678', changes: [change] }],
+      });
+
+      expect((await POST(signedPost(body))).status).toBe(503);
+      expect(h.state.afterCallbacks).toEqual([]);
+      expect(handleTemplateWebhookChange).not.toHaveBeenCalled();
+      expect(h.state.upsertCalls).toEqual([]);
+    }
+  );
+
+  it.each([
+    'messages',
+    'message_template_status_update',
+    'message_template_quality_update',
+    'message_template_components_update',
+  ])(
+    'retains SQL-selected recognized %s with message/status properties',
+    async (field) => {
+      const body = JSON.stringify({
+        entry: [
+          {
+            id: '5678',
+            changes: [{ field, value: { messages: [], statuses: [] } }],
+          },
+        ],
+      });
+
+      expect(await POST(signedPost(body))).toMatchObject({
+        init: { status: 200 },
+      });
+      expect(h.state.afterCallbacks).toHaveLength(1);
+    }
+  );
+
+  it('retains harmless unrelated SQL-selected legacy fields', async () => {
+    const body = JSON.stringify({
+      entry: [
+        {
+          id: '5678',
+          changes: [{ field: 'unrelated', value: { event: 'unchanged' } }],
+        },
+      ],
+    });
+
+    expect(await POST(signedPost(body))).toMatchObject({
+      init: { status: 200 },
+    });
+    expect(h.state.afterCallbacks).toHaveLength(1);
+
+    for (const callback of h.state.afterCallbacks) await callback();
+
+    expect(h.state.upsertCalls).toEqual([]);
+    expect(handleTemplateWebhookChange).not.toHaveBeenCalled();
+  });
+
+  it('authenticates the original signed body, not the filtered subset, before after()', async () => {
+    h.state.ingressResult = {
+      status: 200,
+      legacy_indices: [1],
+      captured: 0,
+      staged: 1,
+    };
+    const response = await POST(signedPost(mixed));
+    expect(response).toMatchObject({ init: { status: 200 } });
+    expect(h.state.afterCallbacks).toHaveLength(1);
+    expect(h.state.ingressCalls).toMatchObject([{ p_authorized: false }]);
+
+    for (const callback of h.state.afterCallbacks) await callback();
+    expect(handleTemplateWebhookChange).toHaveBeenCalledExactlyOnceWith(
+      { ...legacyChange, wabaId: '5678' },
+      expect.anything()
+    );
+    expect(h.state.upsertCalls).toEqual([]);
+  });
+
+  it('does not let a dedicated signature authorize the legacy subset', async () => {
+    h.state.ingressResult = {
+      status: 200,
+      legacy_indices: [1],
+      captured: 0,
+      staged: 1,
+    };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      expect(await POST(signedPost(mixed, 'dedicated-secret'))).toMatchObject({
+        init: { status: 401 },
+      });
+    } finally {
+      warn.mockRestore();
+    }
+
+    expect(h.state.afterCallbacks).toEqual([]);
+    expect(h.state.ingressCalls).toMatchObject([{ p_authorized: true }]);
+  });
+
+  it.each([
+    null,
+    'sha256=bad',
+    `sha256=${createHmac('sha256', 'forged-secret').update(mixed).digest('hex')}`,
+  ])(
+    'rejects unauthenticated original signature %s with no ingress call or after()',
+    async (signature) => {
+      const request = signedPost(mixed);
+
+      if (signature === null) request.headers.delete('x-hub-signature-256');
+      else request.headers.set('x-hub-signature-256', signature);
+
+      expect((await POST(request)).status).toBe(401);
+      expect(h.state.ingressCalls).toEqual([]);
+      expect(h.state.afterCallbacks).toEqual([]);
+    }
+  );
+
+  it('rejects a signature made for only the legacy subset', async () => {
+    h.state.ingressResult = {
+      status: 200,
+      legacy_indices: [1],
+      captured: 0,
+      staged: 1,
+    };
+
+    const subset = JSON.stringify({
+      entry: [{ id: '5678', changes: [legacyChange] }],
+    });
+
+    const request = signedPost(mixed);
+
+    request.headers.set(
+      'x-hub-signature-256',
+      `sha256=${createHmac('sha256', 'legacy-secret').update(subset).digest('hex')}`
+    );
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      expect((await POST(request)).status).toBe(401);
+    } finally {
+      warn.mockRestore();
+    }
+
+    expect(h.state.afterCallbacks).toEqual([]);
+    expect(h.state.ingressCalls).toEqual([]);
+  });
+
+  it('keeps SQL-known legacy working while private ingress is disabled and unconfigured', async () => {
+    vi.stubEnv('WHATSAPP_COEXISTENCE_ENABLED', 'false');
+    vi.stubEnv('WHATSAPP_COEXISTENCE_APP_ID', '');
+    vi.stubEnv('WHATSAPP_COEXISTENCE_APP_SECRET', '');
+
+    const body = JSON.stringify({
+      entry: [{ id: '5678', changes: [legacyChange] }],
+    });
+
+    expect(await POST(signedPost(body))).toMatchObject({
+      init: { status: 200 },
+    });
+    expect(h.state.afterCallbacks).toHaveLength(1);
+    expect(h.state.ingressCalls).toMatchObject([
+      { p_enabled: false, p_app_id: null, p_authorized: false },
+    ]);
+  });
+
+  it('returns a non-200 ingress outcome without legacy continuation', async () => {
+    h.state.ingressResult = {
+      status: 400,
+      legacy_indices: [1],
+      captured: 1,
+      staged: 0,
+    };
+    expect((await POST(signedPost(mixed, 'dedicated-secret'))).status).toBe(
+      400
+    );
+    expect(h.state.afterCallbacks).toEqual([]);
+  });
+
+  it('fully handles private traffic without asking legacy authentication to accept it', async () => {
+    h.state.ingressResult = {
+      status: 200,
+      legacy_indices: [],
+      captured: 0,
+      staged: 1,
+    };
+    expect((await POST(signedPost(mixed, 'dedicated-secret'))).status).toBe(
+      200
+    );
+    expect(h.state.afterCallbacks).toEqual([]);
+    expect(h.state.ingressCalls).toMatchObject([{ p_authorized: true }]);
+  });
+});
 
 describe('inbound webhook: idempotent insert (#367)', () => {
   it('a genuine first delivery persists once and fans out downstream', async () => {
-    await runWebhook()
+    await runWebhook();
 
     // Inserted via upsert with the (conversation_id, message_id) conflict
     // target — not a bare insert.
-    expect(h.state.upsertCalls).toHaveLength(1)
+    expect(h.state.upsertCalls).toHaveLength(1);
     expect(h.state.upsertCalls[0].options).toMatchObject({
       onConflict: 'conversation_id,message_id',
       ignoreDuplicates: true,
-    })
+    });
     // Downstream side effects ran exactly once.
-    expect(h.state.rpcCalls).toHaveLength(1)
-    expect(h.dispatchInboundToFlows).toHaveBeenCalledTimes(1)
-    expect(h.dispatchWebhookEvent).toHaveBeenCalledTimes(1)
-  })
+    expect(h.state.rpcCalls).toHaveLength(1);
+    expect(h.dispatchInboundToFlows).toHaveBeenCalledTimes(1);
+    expect(h.dispatchWebhookEvent).toHaveBeenCalledTimes(1);
+  });
 
   it('a replayed delivery is a no-op: no unread bump, no fan-out', async () => {
     // Upsert hits the unique index and returns no row.
-    h.state.messageUpsertResult = []
+    h.state.messageUpsertResult = [];
 
-    await runWebhook()
+    await runWebhook();
 
-    expect(h.state.upsertCalls).toHaveLength(1)
+    expect(h.state.upsertCalls).toHaveLength(1);
     // None of the downstream side effects fire on a replay.
-    expect(h.state.rpcCalls).toHaveLength(0)
-    expect(h.dispatchInboundToFlows).not.toHaveBeenCalled()
-    expect(h.runAutomationsForTrigger).not.toHaveBeenCalled()
-    expect(h.dispatchInboundToAiReply).not.toHaveBeenCalled()
-    expect(h.dispatchWebhookEvent).not.toHaveBeenCalled()
-  })
-})
+    expect(h.state.rpcCalls).toHaveLength(0);
+    expect(h.dispatchInboundToFlows).not.toHaveBeenCalled();
+    expect(h.runAutomationsForTrigger).not.toHaveBeenCalled();
+    expect(h.dispatchInboundToAiReply).not.toHaveBeenCalled();
+    expect(h.dispatchWebhookEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe('history-first live acceptance', () => {
+  it('promotes a historical placeholder with live image, reply and delivery fields', async () => {
+    const imageMessage = {
+      ...TEXT_MESSAGE,
+      id: 'wamid.image-promotion',
+      type: 'image',
+      image: {
+        id: '1234567890123456',
+        mime_type: 'image/jpeg',
+        caption: 'a photo',
+      },
+    };
+
+    h.state.messageUpsertResult = [];
+    h.state.historyRow = {
+      id: 'history-image',
+      conversation_id: 'conv-1',
+      message_id: imageMessage.id,
+      message_source: 'history',
+      sender_type: 'customer',
+      content_type: 'text',
+      content_text: '[Media unavailable]',
+      media_url: null,
+      media_type: null,
+      status: 'sending',
+    };
+    h.state.replyContextParent = { id: 'reply-parent' };
+
+    await runWebhook({ ...imageMessage, context: { id: 'wamid.parent' } });
+
+    expect(h.state.historyRow).toMatchObject({
+      message_source: 'cloud_api',
+      content_type: 'image',
+      content_text: 'a photo',
+      media_url:
+        'https://cdn.test/chat-media/account-acc-1/inbound/1234567890123456-image-1700000000.jpg',
+      media_type: 'image/jpeg',
+      status: 'delivered',
+      reply_to_message_id: 'reply-parent',
+      interactive_reply_id: null,
+      created_at: '2023-11-14T22:13:20.000Z',
+    });
+    expect(
+      h.state.rpcCalls.filter(
+        (call) =>
+          call.name !== 'coexistence_is_private_media' &&
+          call.name !== 'coexistence_signup_media_allowed'
+      )
+    ).toHaveLength(1);
+
+    h.state.afterCallbacks = [];
+    await runWebhook({ ...imageMessage, context: { id: 'wamid.parent' } });
+
+    expect(
+      h.state.rpcCalls.filter(
+        (call) =>
+          call.name !== 'coexistence_is_private_media' &&
+          call.name !== 'coexistence_signup_media_allowed'
+      )
+    ).toHaveLength(1);
+  });
+
+  it.each(['read', 'failed'])(
+    'stores live interactive content without downgrading historical %s status',
+    async (status) => {
+      h.state.messageUpsertResult = [];
+      h.state.historyRow = {
+        id: 'history-interactive',
+        conversation_id: 'conv-1',
+        message_id: 'wamid.interactive',
+        message_source: 'history',
+        sender_type: 'customer',
+        content_type: 'text',
+        content_text: '[Media unavailable]',
+        status,
+      };
+
+      await runWebhook({
+        ...TEXT_MESSAGE,
+        id: 'wamid.interactive',
+        type: 'interactive',
+        text: undefined,
+        interactive: {
+          type: 'button_reply',
+          button_reply: { id: 'choice-1', title: 'Choice one' },
+        },
+      });
+
+      expect(h.state.historyRow).toMatchObject({
+        message_source: 'cloud_api',
+        content_type: 'interactive',
+        content_text: 'Choice one',
+        interactive_reply_id: 'choice-1',
+        status,
+      });
+      expect(h.state.rpcCalls).toHaveLength(1);
+    }
+  );
+
+  it('promotes history once and runs live effects only for the winner', async () => {
+    h.state.messageUpsertResult = [];
+    h.state.historyRow = {
+      id: 'history-1',
+      conversation_id: 'conv-1',
+      message_id: TEXT_MESSAGE.id,
+      message_source: 'history',
+      sender_type: 'customer',
+      status: 'sent',
+    };
+    await runWebhook();
+    expect(h.state.historyRow.message_source).toBe('cloud_api');
+    expect(h.state.promotionFilters).toEqual([
+      ['conversation_id', 'conv-1'],
+      ['message_id', TEXT_MESSAGE.id],
+      ['message_source', 'history'],
+      ['sender_type', 'customer'],
+    ]);
+    expect(h.state.rpcCalls).toHaveLength(1);
+    expect(h.dispatchInboundToFlows).toHaveBeenCalledTimes(1);
+    h.state.afterCallbacks = [];
+    await runWebhook();
+    expect(h.state.rpcCalls).toHaveLength(1);
+    expect(h.dispatchInboundToFlows).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    {
+      conversation_id: 'other',
+      message_id: TEXT_MESSAGE.id,
+      message_source: 'history',
+      sender_type: 'customer',
+    },
+    {
+      conversation_id: 'conv-1',
+      message_id: 'other',
+      message_source: 'history',
+      sender_type: 'customer',
+    },
+    {
+      conversation_id: 'conv-1',
+      message_id: TEXT_MESSAGE.id,
+      message_source: 'history',
+      sender_type: 'agent',
+    },
+    {
+      conversation_id: 'conv-1',
+      message_id: TEXT_MESSAGE.id,
+      message_source: 'cloud_api',
+      sender_type: 'customer',
+    },
+  ])('does not accept a nonmatching stored row: %j', async (row) => {
+    h.state.messageUpsertResult = [];
+    h.state.historyRow = { id: 'stored-1', status: 'sent', ...row };
+    await runWebhook();
+    expect(h.state.rpcCalls).toHaveLength(0);
+    expect(h.dispatchInboundToFlows).not.toHaveBeenCalled();
+  });
+});
 
 describe('inbound webhook: atomic unread bump (#369)', () => {
   it('increments unread through the DB-side RPC, not a read-modify-write', async () => {
-    await runWebhook()
+    await runWebhook();
 
-    expect(h.state.rpcCalls).toHaveLength(1)
+    expect(h.state.rpcCalls).toHaveLength(1);
     expect(h.state.rpcCalls[0]).toMatchObject({
       name: 'bump_conversation_on_inbound',
       args: { p_conversation_id: 'conv-1' },
-    })
-  })
-})
+    });
+  });
+});
 
 describe('inbound webhook: template quick-reply buttons (#478)', () => {
   // A customer tapping a QUICK_REPLY button on a broadcast template.
@@ -468,22 +1434,22 @@ describe('inbound webhook: template quick-reply buttons (#478)', () => {
     type: 'button',
     button: { text: 'Yes, interested', payload: 'YES_INTERESTED' },
     context: { id: 'wamid.BROADCAST1' },
-  }
+  };
 
   it('stores the tap as an interactive reply, not an unsupported message', async () => {
-    await runWebhook(templateButtonTap)
+    await runWebhook(templateButtonTap);
 
-    expect(h.state.upsertCalls).toHaveLength(1)
+    expect(h.state.upsertCalls).toHaveLength(1);
     expect(h.state.upsertCalls[0].row).toMatchObject({
       content_type: 'interactive',
       content_text: 'Yes, interested',
       interactive_reply_id: 'YES_INTERESTED',
       reply_to_message_id: null,
-    })
-  })
+    });
+  });
 
   it('routes the tap to flows and fires the interactive_reply trigger', async () => {
-    await runWebhook(templateButtonTap)
+    await runWebhook(templateButtonTap);
 
     expect(h.dispatchInboundToFlows).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -493,30 +1459,32 @@ describe('inbound webhook: template quick-reply buttons (#478)', () => {
           reply_title: 'Yes, interested',
           meta_message_id: 'wamid.BTN1',
         },
-      }),
-    )
+      })
+    );
+
     const triggers = h.runAutomationsForTrigger.mock.calls.map(
-      (call) => (call[0] as { triggerType: string }).triggerType,
-    )
-    expect(triggers).toContain('interactive_reply')
+      (call) => (call[0] as { triggerType: string }).triggerType
+    );
+
+    expect(triggers).toContain('interactive_reply');
     // The AI auto-reply must stay out of it — a button tap is not a
     // free-text question.
-    expect(h.dispatchInboundToAiReply).not.toHaveBeenCalled()
-  })
+    expect(h.dispatchInboundToAiReply).not.toHaveBeenCalled();
+  });
 
   it('falls back to the label when the template button carries no payload', async () => {
     await runWebhook({
       ...templateButtonTap,
       button: { text: 'Track my order' },
-    })
+    });
 
     expect(h.state.upsertCalls[0].row).toMatchObject({
       content_type: 'interactive',
       content_text: 'Track my order',
       interactive_reply_id: 'Track my order',
-    })
-  })
-})
+    });
+  });
+});
 
 describe('inbound webhook: inbound media is mirrored (#466)', () => {
   const IMAGE_MESSAGE = {
@@ -525,54 +1493,56 @@ describe('inbound webhook: inbound media is mirrored (#466)', () => {
     timestamp: '1700000000',
     type: 'image',
     image: { id: '1234567890123456', mime_type: 'image/jpeg', caption: 'hi' },
-  }
+  };
 
   it('stores a durable bucket URL instead of the expiring proxy path', async () => {
-    await runWebhook(IMAGE_MESSAGE)
+    await runWebhook(IMAGE_MESSAGE);
 
-    expect(h.state.storageUploads).toHaveLength(1)
-    expect(h.state.storageUploads[0].bucket).toBe('chat-media')
+    expect(h.state.storageUploads).toHaveLength(1);
+    expect(h.state.storageUploads[0].bucket).toBe('chat-media');
     expect(h.state.storageUploads[0].path).toBe(
-      'account-acc-1/inbound/1234567890123456-image-1700000000.jpg',
-    )
+      'account-acc-1/inbound/1234567890123456-image-1700000000.jpg'
+    );
     expect(h.state.upsertCalls[0].row).toMatchObject({
       media_url:
         'https://cdn.test/chat-media/account-acc-1/inbound/1234567890123456-image-1700000000.jpg',
       // Meta's MIME type used to be discarded outright (`void mediaType`).
       media_type: 'image/jpeg',
-    })
-  })
+    });
+  });
 
   it('falls back to the proxy URL when the upload is refused', async () => {
-    h.state.storageUploadError = { message: 'mime type not supported' }
+    h.state.storageUploadError = { message: 'mime type not supported' };
 
-    await runWebhook(IMAGE_MESSAGE)
+    await runWebhook(IMAGE_MESSAGE);
 
     // The message still lands, and it still lands with a usable URL —
     // the mirror failing must never cost us the message.
-    expect(h.state.upsertCalls).toHaveLength(1)
+    expect(h.state.upsertCalls).toHaveLength(1);
     expect(h.state.upsertCalls[0].row).toMatchObject({
       media_url: '/api/whatsapp/media/1234567890123456',
       media_type: 'image/jpeg',
-    })
-  })
+    });
+  });
 
   it('falls back to the proxy URL when the download from Meta throws', async () => {
-    mockDownloadMedia.mockRejectedValueOnce(new Error('Media download failed: 404'))
+    mockDownloadMedia.mockRejectedValueOnce(
+      new Error('Media download failed: 404')
+    );
 
-    await runWebhook(IMAGE_MESSAGE)
+    await runWebhook(IMAGE_MESSAGE);
 
     expect(h.state.upsertCalls[0].row).toMatchObject({
       media_url: '/api/whatsapp/media/1234567890123456',
-    })
-  })
+    });
+  });
 
   it('skips media larger than the bucket accepts, without downloading it', async () => {
     mockGetMediaUrl.mockResolvedValue({
       url: 'https://lookaside.fbsbx.com/whatsapp/big',
       mimeType: 'application/pdf',
       fileSize: 40 * 1024 * 1024,
-    })
+    });
 
     await runWebhook({
       id: 'wamid.DOC1',
@@ -584,26 +1554,26 @@ describe('inbound webhook: inbound media is mirrored (#466)', () => {
         mime_type: 'application/pdf',
         filename: 'huge.pdf',
       },
-    })
+    });
 
-    expect(mockDownloadMedia).not.toHaveBeenCalled()
-    expect(h.state.storageUploads).toHaveLength(0)
+    expect(mockDownloadMedia).not.toHaveBeenCalled();
+    expect(h.state.storageUploads).toHaveLength(0);
     expect(h.state.upsertCalls[0].row).toMatchObject({
       media_url: '/api/whatsapp/media/999',
       media_type: 'application/pdf',
-    })
-  })
+    });
+  });
 
   it("names the object after a document's own filename", async () => {
     mockGetMediaUrl.mockResolvedValue({
       url: 'https://lookaside.fbsbx.com/whatsapp/doc',
       mimeType: 'application/pdf',
       fileSize: 4096,
-    })
+    });
     mockDownloadMedia.mockResolvedValue({
       buffer: Buffer.alloc(4096),
       contentType: 'application/pdf',
-    })
+    });
 
     await runWebhook({
       id: 'wamid.DOC2',
@@ -616,56 +1586,72 @@ describe('inbound webhook: inbound media is mirrored (#466)', () => {
         filename: 'invoice.pdf',
         caption: 'have a look',
       },
-    })
+    });
 
     expect(h.state.storageUploads[0].path).toBe(
-      'account-acc-1/inbound/1234567890123456-invoice.pdf',
-    )
-  })
+      'account-acc-1/inbound/1234567890123456-invoice.pdf'
+    );
+  });
 
   it('does not mirror when the account has opted out', async () => {
-    h.state.mirrorInboundMedia = false
+    h.state.mirrorInboundMedia = false;
 
-    await runWebhook(IMAGE_MESSAGE)
+    await runWebhook(IMAGE_MESSAGE);
 
-    expect(mockDownloadMedia).not.toHaveBeenCalled()
-    expect(h.state.storageUploads).toHaveLength(0)
+    expect(mockDownloadMedia).not.toHaveBeenCalled();
+    expect(h.state.storageUploads).toHaveLength(0);
     expect(h.state.upsertCalls[0].row).toMatchObject({
       media_url: '/api/whatsapp/media/1234567890123456',
       // Still recorded — the MIME type costs nothing and makes the
       // download name right even for proxied media.
       media_type: 'image/jpeg',
-    })
-  })
+    });
+  });
 
   it('mirrors when the column is absent, e.g. a row read before migration 039', async () => {
-    h.state.mirrorInboundMedia = undefined
+    h.state.mirrorInboundMedia = undefined;
 
-    await runWebhook(IMAGE_MESSAGE)
+    await runWebhook(IMAGE_MESSAGE);
 
-    expect(h.state.storageUploads).toHaveLength(1)
-  })
+    expect(h.state.storageUploads).toHaveLength(1);
+  });
 
   it('leaves text messages alone', async () => {
-    await runWebhook()
+    await runWebhook();
 
-    expect(mockGetMediaUrl).not.toHaveBeenCalled()
-    expect(h.state.storageUploads).toHaveLength(0)
-    expect(h.state.upsertCalls[0].row).toMatchObject({ media_type: null })
-  })
-})
+    expect(mockGetMediaUrl).not.toHaveBeenCalled();
+    expect(h.state.storageUploads).toHaveLength(0);
+    expect(h.state.upsertCalls[0].row).toMatchObject({ media_type: null });
+  });
+});
+
+describe('legacy interactive compatibility', () => {
+  it('retains the existing fallback for unsupported interactive subtypes', async () => {
+    await runWebhook({
+      ...TEXT_MESSAGE,
+      type: 'interactive',
+      interactive: { type: 'nfm_reply', nfm_reply: { response_json: '{}' } },
+    });
+
+    expect(h.state.upsertCalls[0].row).toMatchObject({
+      content_type: 'interactive',
+      content_text: '[Interactive reply]',
+      interactive_reply_id: null,
+    });
+  });
+});
 
 describe('inbound webhook: after() awaits automations (#368)', () => {
   it('every triggered automation settles before the after() callback resolves', async () => {
-    await runWebhook()
+    await runWebhook();
 
     // first_inbound_message + new_message_received + keyword_match.
-    expect(h.state.automationStarted).toBe(3)
+    expect(h.state.automationStarted).toBe(3);
     // If the dispatches were fire-and-forget, completed would still be 0
     // here — the callback would have resolved before the timers fired.
-    expect(h.state.automationCompleted).toBe(3)
-  })
-})
+    expect(h.state.automationCompleted).toBe(3);
+  });
+});
 
 // ============================================================
 // Business-scoped user IDs (issue #519)
@@ -688,7 +1674,7 @@ const USERNAME_ONLY_MESSAGE = {
   timestamp: '1700000000',
   type: 'text',
   text: { body: 'does it come in another color?' },
-}
+};
 
 const USERNAME_ONLY_CONTACTS = [
   {
@@ -696,17 +1682,17 @@ const USERNAME_ONLY_CONTACTS = [
     user_id: 'US.13491208655302741918',
     parent_user_id: 'US.ENT.11815799212886844830',
   },
-]
+];
 
 describe('inbound webhook: business-scoped user IDs (#519)', () => {
   it('creates ONE contact keyed on the BSUID when Meta sends no phone', async () => {
     // Nothing on file under either key yet.
-    h.state.contactByWaUserId = null
-    mockFindExistingContact.mockResolvedValue(null)
+    h.state.contactByWaUserId = null;
+    mockFindExistingContact.mockResolvedValue(null);
 
-    await runWebhook(USERNAME_ONLY_MESSAGE, USERNAME_ONLY_CONTACTS)
+    await runWebhook(USERNAME_ONLY_MESSAGE, USERNAME_ONLY_CONTACTS);
 
-    expect(h.state.contactInserts).toHaveLength(1)
+    expect(h.state.contactInserts).toHaveLength(1);
     expect(h.state.contactInserts[0]).toMatchObject({
       account_id: 'acc-1',
       phone: '',
@@ -714,21 +1700,21 @@ describe('inbound webhook: business-scoped user IDs (#519)', () => {
       wa_parent_user_id: 'US.ENT.11815799212886844830',
       wa_username: 'realsheenanelson',
       name: 'Sheena Nelson',
-    })
+    });
     // The message still lands in the thread.
-    expect(h.state.upsertCalls).toHaveLength(1)
-  })
+    expect(h.state.upsertCalls).toHaveLength(1);
+  });
 
   it('never looks the sender up by phone when there is no phone', async () => {
-    h.state.contactByWaUserId = null
-    mockFindExistingContact.mockResolvedValue(null)
+    h.state.contactByWaUserId = null;
+    mockFindExistingContact.mockResolvedValue(null);
 
-    await runWebhook(USERNAME_ONLY_MESSAGE, USERNAME_ONLY_CONTACTS)
+    await runWebhook(USERNAME_ONLY_MESSAGE, USERNAME_ONLY_CONTACTS);
 
     // The old code called this with '' and got null every time, which
     // is exactly how the duplicate contacts got created.
-    expect(mockFindExistingContact).not.toHaveBeenCalled()
-  })
+    expect(mockFindExistingContact).not.toHaveBeenCalled();
+  });
 
   it('reuses the existing contact on the SECOND message from the same BSUID', async () => {
     // The row the first message created.
@@ -739,18 +1725,18 @@ describe('inbound webhook: business-scoped user IDs (#519)', () => {
       wa_user_id: 'US.13491208655302741918',
       wa_parent_user_id: 'US.ENT.11815799212886844830',
       wa_username: 'realsheenanelson',
-    }
-    mockFindExistingContact.mockResolvedValue(null)
+    };
+    mockFindExistingContact.mockResolvedValue(null);
 
     await runWebhook(
       { ...USERNAME_ONLY_MESSAGE, id: 'wamid.BSUID2' },
-      USERNAME_ONLY_CONTACTS,
-    )
+      USERNAME_ONLY_CONTACTS
+    );
 
-    expect(h.state.contactInserts).toHaveLength(0)
+    expect(h.state.contactInserts).toHaveLength(0);
     // Nothing about the identity changed, so no pointless UPDATE either.
-    expect(h.state.contactUpdates).toHaveLength(0)
-  })
+    expect(h.state.contactUpdates).toHaveLength(0);
+  });
 
   it('backfills the BSUID onto a contact we already knew by phone', async () => {
     // Transition payload: Meta sends both keys. We match on the phone
@@ -760,7 +1746,7 @@ describe('inbound webhook: business-scoped user IDs (#519)', () => {
       id: 'contact-1',
       name: 'Pablo',
       phone: '16505551234',
-    })
+    });
 
     await runWebhook(
       {
@@ -777,18 +1763,18 @@ describe('inbound webhook: business-scoped user IDs (#519)', () => {
           wa_id: '16505551234',
           user_id: 'US.13491208655302741918',
         },
-      ],
-    )
+      ]
+    );
 
-    expect(h.state.contactInserts).toHaveLength(0)
-    expect(h.state.contactUpdates).toHaveLength(1)
+    expect(h.state.contactInserts).toHaveLength(0);
+    expect(h.state.contactUpdates).toHaveLength(1);
     expect(h.state.contactUpdates[0]).toMatchObject({
       wa_user_id: 'US.13491208655302741918',
       wa_username: 'pablomorales',
-    })
+    });
     // The number we already had is left alone.
-    expect(h.state.contactUpdates[0]).not.toHaveProperty('phone')
-  })
+    expect(h.state.contactUpdates[0]).not.toHaveProperty('phone');
+  });
 
   it('fills in the phone once Meta finally discloses it', async () => {
     h.state.contactByWaUserId = {
@@ -797,7 +1783,7 @@ describe('inbound webhook: business-scoped user IDs (#519)', () => {
       phone: '',
       wa_user_id: 'US.13491208655302741918',
       wa_username: 'realsheenanelson',
-    }
+    };
 
     await runWebhook(
       {
@@ -805,15 +1791,15 @@ describe('inbound webhook: business-scoped user IDs (#519)', () => {
         id: 'wamid.BSUID3',
         from: '16505551234',
       },
-      USERNAME_ONLY_CONTACTS,
-    )
+      USERNAME_ONLY_CONTACTS
+    );
 
-    expect(h.state.contactUpdates).toHaveLength(1)
-    expect(h.state.contactUpdates[0]).toMatchObject({ phone: '16505551234' })
-  })
+    expect(h.state.contactUpdates).toHaveLength(1);
+    expect(h.state.contactUpdates[0]).toMatchObject({ phone: '16505551234' });
+  });
 
   it('drops a delivery that carries neither key rather than inventing a contact', async () => {
-    mockFindExistingContact.mockResolvedValue(null)
+    mockFindExistingContact.mockResolvedValue(null);
 
     const res = await runWebhook(
       {
@@ -822,31 +1808,31 @@ describe('inbound webhook: business-scoped user IDs (#519)', () => {
         type: 'text',
         text: { body: 'who am i' },
       },
-      [{ profile: { name: 'Nobody' } }],
-    )
+      [{ profile: { name: 'Nobody' } }]
+    );
 
-    expect(h.state.contactInserts).toHaveLength(0)
-    expect(h.state.upsertCalls).toHaveLength(0)
+    expect(h.state.contactInserts).toHaveLength(0);
+    expect(h.state.upsertCalls).toHaveLength(0);
     // Still a 200 — Meta must not be told to retry a payload we can
     // never process.
     expect(
-      (res as unknown as { init?: { status?: number } }).init?.status,
-    ).toBe(200)
-  })
+      (res as unknown as { init?: { status?: number } }).init?.status
+    ).toBe(200);
+  });
 
   it('leaves the legacy phone-only payload behaving exactly as before', async () => {
-    await runWebhook()
+    await runWebhook();
 
     expect(mockFindExistingContact).toHaveBeenCalledWith(
       expect.anything(),
       'acc-1',
-      '15551230000',
-    )
-    expect(h.state.contactInserts).toHaveLength(0)
-    expect(h.state.contactUpdates).toHaveLength(0)
-    expect(h.state.upsertCalls).toHaveLength(1)
-  })
-})
+      '15551230000'
+    );
+    expect(h.state.contactInserts).toHaveLength(0);
+    expect(h.state.contactUpdates).toHaveLength(0);
+    expect(h.state.upsertCalls).toHaveLength(1);
+  });
+});
 
 describe('inbound webhook: contact name backfill (#519 regression guard)', () => {
   it('never overwrites an edited name with the phone number', async () => {
@@ -857,27 +1843,27 @@ describe('inbound webhook: contact name backfill (#519 regression guard)', () =>
       id: 'contact-1',
       name: 'Ada (VIP, calls Mondays)',
       phone: '15551230000',
-    })
+    });
 
-    await runWebhook(TEXT_MESSAGE, [{ wa_id: '15551230000', profile: {} }])
+    await runWebhook(TEXT_MESSAGE, [{ wa_id: '15551230000', profile: {} }]);
 
-    expect(h.state.contactUpdates).toHaveLength(0)
-  })
+    expect(h.state.contactUpdates).toHaveLength(0);
+  });
 
   it('does adopt a username when that is all Meta gives us', async () => {
     mockFindExistingContact.mockResolvedValue({
       id: 'contact-1',
       name: '15551230000',
       phone: '15551230000',
-    })
+    });
 
     await runWebhook(TEXT_MESSAGE, [
       { wa_id: '15551230000', profile: { username: 'ada' } },
-    ])
+    ]);
 
-    expect(h.state.contactUpdates[0]).toMatchObject({ name: 'ada' })
-  })
-})
+    expect(h.state.contactUpdates[0]).toMatchObject({ name: 'ada' });
+  });
+});
 
 describe('template-lifecycle webhooks: WABA id is threaded to the handler (#534)', () => {
   it('passes entry.id as wabaId so an unknown template can be stubbed for the right account', async () => {
@@ -886,7 +1872,8 @@ describe('template-lifecycle webhooks: WABA id is threaded to the handler (#534)
       message_template_id: '4242',
       message_template_name: 'created_in_meta',
       message_template_language: 'en_US',
-    }
+    };
+
     const body = {
       entry: [
         {
@@ -894,25 +1881,27 @@ describe('template-lifecycle webhooks: WABA id is threaded to the handler (#534)
           changes: [{ field: 'message_template_status_update', value }],
         },
       ],
-    }
-    const req = signedPost(JSON.stringify(body))
+    };
 
-    await POST(req)
-    for (const cb of h.state.afterCallbacks) await cb()
+    const req = signedPost(JSON.stringify(body));
 
-    const mockHandle = vi.mocked(handleTemplateWebhookChange)
-    expect(mockHandle).toHaveBeenCalledTimes(1)
+    await POST(req);
+
+    for (const cb of h.state.afterCallbacks) await cb();
+
+    const mockHandle = vi.mocked(handleTemplateWebhookChange);
+    expect(mockHandle).toHaveBeenCalledTimes(1);
     expect(mockHandle.mock.calls[0][0]).toEqual({
       field: 'message_template_status_update',
       value,
       wabaId: 'WABA-1',
-    })
+    });
     // A template event must not fall through to the messaging branch.
-    expect(h.state.upsertCalls).toHaveLength(0)
-  })
-})
+    expect(h.state.upsertCalls).toHaveLength(0);
+  });
+});
 
-describe('status webhook: failed statuses keep Meta\'s reason (#535)', () => {
+describe("status webhook: failed statuses keep Meta's reason (#535)", () => {
   const FAILED_STATUS = {
     id: 'wamid.OUT1',
     status: 'failed',
@@ -921,8 +1910,10 @@ describe('status webhook: failed statuses keep Meta\'s reason (#535)', () => {
     errors: [
       {
         code: 131049,
-        title: 'This message was not delivered to maintain healthy ecosystem engagement.',
-        message: 'This message was not delivered to maintain healthy ecosystem engagement.',
+        title:
+          'This message was not delivered to maintain healthy ecosystem engagement.',
+        message:
+          'This message was not delivered to maintain healthy ecosystem engagement.',
         error_data: {
           details:
             'In order to maintain a healthy ecosystem engagement, the message failed to be delivered.',
@@ -930,17 +1921,18 @@ describe('status webhook: failed statuses keep Meta\'s reason (#535)', () => {
         href: 'https://developers.facebook.com/docs/whatsapp/cloud-api/support/error-codes/',
       },
     ],
-  }
+  };
 
   it('hands code, title and details to the message status sync with the status', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
     try {
-      await runStatusWebhook(FAILED_STATUS)
+      await runStatusWebhook(FAILED_STATUS);
     } finally {
-      warn.mockRestore()
+      warn.mockRestore();
     }
 
-    expect(h.applyMessageStatus).toHaveBeenCalledTimes(1)
+    expect(h.applyMessageStatus).toHaveBeenCalledTimes(1);
     expect(h.applyMessageStatus.mock.calls[0][2]).toEqual({
       wamid: 'wamid.OUT1',
       status: 'failed',
@@ -950,163 +1942,176 @@ describe('status webhook: failed statuses keep Meta\'s reason (#535)', () => {
         details: FAILED_STATUS.errors[0].error_data.details,
       },
       statusAt: new Date(1700000100 * 1000).toISOString(),
-    })
-  })
+    });
+  });
 
   it('logs one warning line carrying the wamid, code and title', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
     try {
-      await runStatusWebhook(FAILED_STATUS)
-      expect(warn).toHaveBeenCalledTimes(1)
-      const line = String(warn.mock.calls[0][0])
-      expect(line).toContain('wamid.OUT1')
-      expect(line).toContain('131049')
-      expect(line).toContain(FAILED_STATUS.errors[0].title)
-      expect(line).toContain(FAILED_STATUS.errors[0].error_data.details)
+      await runStatusWebhook(FAILED_STATUS);
+      expect(warn).toHaveBeenCalledTimes(1);
+      const line = String(warn.mock.calls[0][0]);
+      expect(line).toContain('wamid.OUT1');
+      expect(line).toContain('131049');
+      expect(line).toContain(FAILED_STATUS.errors[0].title);
+      expect(line).toContain(FAILED_STATUS.errors[0].error_data.details);
     } finally {
-      warn.mockRestore()
+      warn.mockRestore();
     }
-  })
+  });
 
   it('folds the reason into broadcast_recipients.error_message', async () => {
-    h.state.broadcastRecipient = { id: 'rec-1', status: 'sent' }
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    h.state.broadcastRecipient = { id: 'rec-1', status: 'sent' };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
     try {
-      await runStatusWebhook(FAILED_STATUS)
+      await runStatusWebhook(FAILED_STATUS);
     } finally {
-      warn.mockRestore()
+      warn.mockRestore();
     }
 
-    expect(h.state.recipientUpdates).toHaveLength(1)
-    expect(h.state.recipientUpdates[0].status).toBe('failed')
-    const reason = String(h.state.recipientUpdates[0].error_message)
-    expect(reason).toContain('131049')
-    expect(reason).toContain(FAILED_STATUS.errors[0].title)
-    expect(reason).toContain(FAILED_STATUS.errors[0].error_data.details)
-  })
+    expect(h.state.recipientUpdates).toHaveLength(1);
+    expect(h.state.recipientUpdates[0].status).toBe('failed');
+    const reason = String(h.state.recipientUpdates[0].error_message);
+    expect(reason).toContain('131049');
+    expect(reason).toContain(FAILED_STATUS.errors[0].title);
+    expect(reason).toContain(FAILED_STATUS.errors[0].error_data.details);
+  });
 
   it('a failed status with no errors array still flips status and stores no reason', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
     try {
-      await runStatusWebhook({ ...FAILED_STATUS, errors: undefined })
+      await runStatusWebhook({ ...FAILED_STATUS, errors: undefined });
     } finally {
-      warn.mockRestore()
+      warn.mockRestore();
     }
-    expect(warn).not.toHaveBeenCalled()
+
+    expect(warn).not.toHaveBeenCalled();
     expect(h.applyMessageStatus.mock.calls[0][2]).toMatchObject({
       status: 'failed',
       failure: null,
-    })
-  })
+    });
+  });
 
   it('a plain delivered status updates only status — error columns untouched', async () => {
-    h.state.broadcastRecipient = { id: 'rec-1', status: 'sent' }
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    h.state.broadcastRecipient = { id: 'rec-1', status: 'sent' };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
     try {
       await runStatusWebhook({
         id: 'wamid.OUT1',
         status: 'delivered',
         timestamp: '1700000100',
         recipient_id: '15551230000',
-      })
+      });
     } finally {
-      warn.mockRestore()
+      warn.mockRestore();
     }
 
-    expect(warn).not.toHaveBeenCalled()
+    expect(warn).not.toHaveBeenCalled();
     expect(h.applyMessageStatus.mock.calls[0][2]).toMatchObject({
       status: 'delivered',
       failure: null,
-    })
-    expect(h.state.recipientUpdates).toHaveLength(1)
-    expect(h.state.recipientUpdates[0]).not.toHaveProperty('error_message')
-    expect(h.state.recipientUpdates[0]).not.toHaveProperty('error_code')
-  })
+    });
+    expect(h.state.recipientUpdates).toHaveLength(1);
+    expect(h.state.recipientUpdates[0]).not.toHaveProperty('error_message');
+    expect(h.state.recipientUpdates[0]).not.toHaveProperty('error_code');
+  });
 
   it('a late delivered status never regresses a recipient that is already read', async () => {
-    h.state.broadcastRecipient = { id: 'rec-1', status: 'read' }
+    h.state.broadcastRecipient = { id: 'rec-1', status: 'read' };
     await runStatusWebhook({
       id: 'wamid.OUT1',
       status: 'delivered',
       timestamp: '1700000100',
       recipient_id: '15551230000',
-    })
+    });
 
     expect(h.applyMessageStatus.mock.calls[0][2]).toMatchObject({
       status: 'delivered',
-    })
-    expect(h.state.recipientUpdates).toHaveLength(0)
-  })
-})
+    });
+    expect(h.state.recipientUpdates).toHaveLength(0);
+  });
+});
 
 describe('inbound webhook: automation waiting for a reply', () => {
   const triggersFired = () =>
     h.runAutomationsForTrigger.mock.calls.map(
-      (call) => (call[0] as { triggerType: string }).triggerType,
-    )
+      (call) => (call[0] as { triggerType: string }).triggerType
+    );
 
   it('offers the message to a waiting automation before any trigger fires', async () => {
-    await runWebhook()
+    await runWebhook();
 
     expect(h.resumeAwaitingReply).toHaveBeenCalledWith(
       expect.objectContaining({
         context: expect.objectContaining({ message_text: 'hello' }),
-      }),
-    )
+      })
+    );
     // Nothing was waiting, so the content triggers fire as normal.
     expect(triggersFired()).toEqual(
-      expect.arrayContaining(['new_message_received', 'keyword_match']),
-    )
-  })
+      expect.arrayContaining(['new_message_received', 'keyword_match'])
+    );
+  });
 
   it('suppresses content triggers and AI reply when a waiting automation took it', async () => {
-    h.resumeAwaitingReply.mockResolvedValue(true)
+    h.resumeAwaitingReply.mockResolvedValue(true);
 
-    await runWebhook()
+    await runWebhook();
 
-    expect(triggersFired()).not.toContain('new_message_received')
-    expect(triggersFired()).not.toContain('keyword_match')
-    expect(h.dispatchInboundToAiReply).not.toHaveBeenCalled()
-  })
+    expect(triggersFired()).not.toContain('new_message_received');
+    expect(triggersFired()).not.toContain('keyword_match');
+    expect(h.dispatchInboundToAiReply).not.toHaveBeenCalled();
+  });
 
   it('leaves the message to a flow that consumed it', async () => {
-    h.dispatchInboundToFlows.mockResolvedValue({ consumed: true })
+    h.dispatchInboundToFlows.mockResolvedValue({ consumed: true });
 
-    await runWebhook()
+    await runWebhook();
 
-    expect(h.resumeAwaitingReply).not.toHaveBeenCalled()
-  })
-})
+    expect(h.resumeAwaitingReply).not.toHaveBeenCalled();
+  });
+});
 
 describe('inbound webhook: oversized body cap', () => {
   it('answers 413 for a body over the cap and schedules no processing', async () => {
-    const before = h.state.afterCallbacks.length
-    const res = (await POST(signedPost('x'.repeat(MAX_WEBHOOK_BODY_BYTES + 1)))) as unknown as {
-      init?: { status?: number }
-    }
-    expect(res.init?.status).toBe(413)
-    expect(h.state.afterCallbacks).toHaveLength(before)
-  })
+    const before = h.state.afterCallbacks.length;
+
+    const res = (await POST(
+      signedPost('x'.repeat(MAX_WEBHOOK_BODY_BYTES + 1))
+    )) as unknown as {
+      init?: { status?: number };
+    };
+
+    expect(res.init?.status).toBe(413);
+    expect(h.state.afterCallbacks).toHaveLength(before);
+  });
 
   it('answers 413 from the declared Content-Length alone', async () => {
-    const before = h.state.afterCallbacks.length
+    const before = h.state.afterCallbacks.length;
+
     const req = new Request('http://localhost/api/whatsapp/webhook', {
       method: 'POST',
-      headers: { 'content-length': String(MAX_WEBHOOK_BODY_BYTES + 1), 'x-hub-signature-256': 'sha256=stub' },
+      headers: {
+        'content-length': String(MAX_WEBHOOK_BODY_BYTES + 1),
+        'x-hub-signature-256': 'sha256=stub',
+      },
       body: '{}',
-    })
-    const res = (await POST(req)) as unknown as { init?: { status?: number } }
-    expect(res.init?.status).toBe(413)
-    expect(h.state.afterCallbacks).toHaveLength(before)
-  })
+    });
+
+    const res = (await POST(req)) as unknown as { init?: { status?: number } };
+    expect(res.init?.status).toBe(413);
+    expect(h.state.afterCallbacks).toHaveLength(before);
+  });
 
   it('lets a body at the cap through to JSON parsing', async () => {
-    const res = (await POST(signedPost('x'.repeat(MAX_WEBHOOK_BODY_BYTES)))) as unknown as {
-      init?: { status?: number }
-    }
-    expect(res.init?.status).toBe(400)
-  })
-})
+    const res = await POST(signedPost('x'.repeat(MAX_WEBHOOK_BODY_BYTES)));
+
+    expect(res.status).toBe(400);
+  });
+});
 
 describe('status webhook: scoped to the receiving number', () => {
   const DELIVERED = {
@@ -1114,27 +2119,45 @@ describe('status webhook: scoped to the receiving number', () => {
     status: 'delivered',
     timestamp: '1700000100',
     recipient_id: '15551230000',
-  }
+  };
+
+  it('does not access the broadcast mirror when the receiving account is unresolved', async () => {
+    h.state.statusAccountFound = false;
+    h.state.broadcastRecipient = { id: 'rec-1', status: 'sent' };
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      await runStatusWebhook(DELIVERED);
+    } finally {
+      error.mockRestore();
+    }
+
+    expect(h.applyMessageStatus).not.toHaveBeenCalled();
+    expect(h.state.recipientAccesses).toBe(0);
+    expect(h.state.recipientUpdates).toEqual([]);
+  });
 
   it('resolves the account from metadata.phone_number_id before touching messages', async () => {
-    await runStatusWebhook(DELIVERED)
+    await runStatusWebhook(DELIVERED);
 
     expect(h.state.whatsappConfigLookups).toEqual([
       { columns: 'account_id', value: 'pn-1' },
-    ])
+    ]);
     expect(h.applyMessageStatus).toHaveBeenCalledWith(
       expect.anything(),
       'acc-1',
-      expect.objectContaining({ wamid: 'wamid.OUT1' }),
-    )
-  })
+      expect.objectContaining({ wamid: 'wamid.OUT1' })
+    );
+  });
 
   it('dispatches message.status_updated to that account for each row that advanced', async () => {
-    h.applyMessageStatus.mockResolvedValue([{ id: 'm1', conversation_id: 'conv-9' }])
+    h.applyMessageStatus.mockResolvedValue([
+      { id: 'm1', conversation_id: 'conv-9' },
+    ]);
 
-    await runStatusWebhook(DELIVERED)
+    await runStatusWebhook(DELIVERED);
 
-    expect(h.dispatchWebhookEvent).toHaveBeenCalledTimes(1)
+    expect(h.dispatchWebhookEvent).toHaveBeenCalledTimes(1);
     expect(h.dispatchWebhookEvent.mock.calls[0].slice(1)).toEqual([
       'acc-1',
       'message.status_updated',
@@ -1143,33 +2166,33 @@ describe('status webhook: scoped to the receiving number', () => {
         conversation_id: 'conv-9',
         status: 'delivered',
       },
-    ])
-  })
+    ]);
+  });
 
   it('dispatches nothing when the status was stale and moved no row', async () => {
-    await runStatusWebhook(DELIVERED)
-    expect(h.dispatchWebhookEvent).not.toHaveBeenCalled()
-  })
-})
+    await runStatusWebhook(DELIVERED);
+    expect(h.dispatchWebhookEvent).not.toHaveBeenCalled();
+  });
+});
 
 describe('inbound webhook: first_inbound_message fires once', () => {
   const firstInboundRuns = () =>
     h.runAutomationsForTrigger.mock.calls.filter(
-      ([arg]) => arg.triggerType === 'first_inbound_message',
-    ).length
+      ([arg]) => arg.triggerType === 'first_inbound_message'
+    ).length;
 
   it('claims the conversation atomically so a concurrent second message does not refire it', async () => {
-    await runWebhook()
-    h.state.afterCallbacks = []
-    await runWebhook({ ...TEXT_MESSAGE, id: 'wamid.TEST2' })
+    await runWebhook();
+    h.state.afterCallbacks = [];
+    await runWebhook({ ...TEXT_MESSAGE, id: 'wamid.TEST2' });
 
-    expect(h.state.firstInboundClaims).toBe(2)
-    expect(firstInboundRuns()).toBe(1)
-  })
+    expect(h.state.firstInboundClaims).toBe(2);
+    expect(firstInboundRuns()).toBe(1);
+  });
 
   it('does not claim on a replayed delivery', async () => {
-    h.state.messageUpsertResult = []
-    await runWebhook()
-    expect(h.state.firstInboundClaims).toBe(0)
-  })
-})
+    h.state.messageUpsertResult = [];
+    await runWebhook();
+    expect(h.state.firstInboundClaims).toBe(0);
+  });
+});

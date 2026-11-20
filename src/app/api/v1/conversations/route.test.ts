@@ -7,6 +7,7 @@ function fakeSupabase() {
     select: () => builder,
     eq: (column: string, value: unknown) => {
       mocks.eqCalls.push([column, value]);
+
       return builder;
     },
     or: () => builder,
@@ -15,6 +16,7 @@ function fakeSupabase() {
     then: (resolve: (v: { data: unknown[]; error: null }) => void) =>
       resolve({ data: [], error: null }),
   };
+
   return { from: () => builder };
 }
 
@@ -32,6 +34,7 @@ describe('GET /api/v1/conversations', () => {
     const res = await GET(
       new Request('https://x.test/api/v1/conversations?contact_id=abc')
     );
+
     expect(res.status).toBe(400);
     const body = await res.json();
     expect(body.error.code).toBe('bad_request');
@@ -39,11 +42,11 @@ describe('GET /api/v1/conversations', () => {
 
   it('filters by a valid contact_id', async () => {
     const contactId = '3f2b8c1e-9a4d-4e2f-b6a1-0c9d8e7f6a5b';
+
     const res = await GET(
-      new Request(
-        `https://x.test/api/v1/conversations?contact_id=${contactId}`
-      )
+      new Request(`https://x.test/api/v1/conversations?contact_id=${contactId}`)
     );
+
     expect(res.status).toBe(200);
     expect(mocks.eqCalls).toContainEqual(['contact_id', contactId]);
   });

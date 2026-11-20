@@ -2,7 +2,7 @@
 
 import { useCan } from '@/hooks/use-can';
 
-import { useTranslations } from 'next-intl';
+import { useTranslations } from 'use-intl';
 
 import { CustomFieldsSettings } from './custom-fields-settings';
 import { SettingsPanelHead } from './settings-panel-head';

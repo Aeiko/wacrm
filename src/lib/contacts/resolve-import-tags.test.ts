@@ -22,6 +22,7 @@ function fakeTagsDb(options: {
     events: [] as string[],
     linkUpserts: [] as { contact_id: string; tag_id: string }[][],
   };
+
   let lookupIndex = 0;
 
   function tagsTable() {
@@ -31,20 +32,27 @@ function fakeTagsDb(options: {
           eq: () => query,
           ilikeAnyOf: (_column: string, patterns: string[]) => {
             calls.patterns.push(patterns);
+
             return query;
           },
           order: () => query,
           range: (from: number, to: number) => {
             calls.ranges.push([from, to]);
+
             return query;
           },
           then: (resolve: (v: { data: TagRow[]; error: null }) => void) =>
-            resolve({ data: options.lookups[lookupIndex++] ?? [], error: null }),
+            resolve({
+              data: options.lookups[lookupIndex++] ?? [],
+              error: null,
+            }),
         };
+
         return query;
       },
       insert: (rows: unknown) => {
         calls.inserts.push(rows);
+
         return {
           select: async () => ({ data: options.inserted ?? [], error: null }),
         };
@@ -55,11 +63,14 @@ function fakeTagsDb(options: {
             if (column === 'id') {
               calls.deletedIds.push(value);
               calls.events.push(`delete-tag:${value}`);
+
               return Promise.resolve({ error: null });
             }
+
             return query;
           },
         };
+
         return query;
       },
     };
@@ -71,21 +82,31 @@ function fakeTagsDb(options: {
         let tagId = '';
         let from = 0;
         let to = 0;
+
         const query = {
           eq: (_column: string, value: string) => {
             tagId = value;
+
             return query;
           },
           order: () => query,
           range: (start: number, end: number) => {
             from = start;
             to = end;
+
             return query;
           },
           then: (
-            resolve: (v: { data: { contact_id: string }[]; error: null }) => void
+            resolve: (v: {
+              data: { contact_id: string }[];
+              error: null;
+            }) => void
           ) => {
-            const links = (options.linksByTagId?.[tagId] ?? []).slice(from, to + 1);
+            const links = (options.linksByTagId?.[tagId] ?? []).slice(
+              from,
+              to + 1
+            );
+
             calls.events.push(`read-links:${tagId}`);
             resolve({
               data: links.map((contactId) => ({ contact_id: contactId })),
@@ -93,11 +114,13 @@ function fakeTagsDb(options: {
             });
           },
         };
+
         return query;
       },
       upsert: async (rows: { contact_id: string; tag_id: string }[]) => {
         calls.linkUpserts.push(rows);
         calls.events.push('upsert-links');
+
         return { error: options.linkUpsertError ?? null };
       },
     };
@@ -106,6 +129,7 @@ function fakeTagsDb(options: {
   const db = {
     from(table: string) {
       if (table === 'tags') return tagsTable();
+
       if (table === 'contact_tags') return contactTagsTable();
       throw new Error(`unexpected table ${table}`);
     },
@@ -217,6 +241,7 @@ describe('resolveImportTagIds', () => {
 
   it('converges on the oldest tag and removes its own copy after losing a concurrent create', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
     const { db, calls } = fakeTagsDb({
       lookups: [
         [],
@@ -256,6 +281,7 @@ describe('resolveImportTagIds', () => {
       id: `t-${i}`,
       name: String(i % 10),
     }));
+
     const { db, calls } = fakeTagsDb({
       lookups: [lookAlikes, [{ id: 't-percent', name: '%' }]],
     });
@@ -303,6 +329,7 @@ describe('resolveImportTagIds', () => {
 
   it('keeps the losing copy when its contacts could not be moved', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
     const { db, calls } = fakeTagsDb({
       lookups: [
         [],

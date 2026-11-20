@@ -30,6 +30,7 @@ export async function GET(request: Request) {
 
     if (error) {
       console.error('[api/v1/webhooks] list error:', error);
+
       return fail('internal', 'Failed to list webhooks', 500);
     }
 
@@ -54,17 +55,21 @@ export async function POST(request: Request) {
       string,
       unknown
     > | null;
+
     if (!body || typeof body !== 'object') {
       return fail('bad_request', 'Request body must be a JSON object', 400);
     }
 
     const urlCheck = checkWebhookUrl(body.url);
+
     if (!urlCheck.ok) {
       return fail('bad_request', urlCheck.message, 400);
     }
+
     const url = urlCheck.url;
 
     const events = normalizeEvents(body.events);
+
     if (!events) {
       return fail(
         'bad_request',
@@ -89,12 +94,16 @@ export async function POST(request: Request) {
 
     if (error || !created) {
       console.error('[api/v1/webhooks] create error:', error);
+
       return fail('internal', 'Failed to create webhook', 500);
     }
 
     // Secret shown exactly once.
     return ok(
-      { ...serializeWebhookEndpoint(created as Record<string, unknown>), secret },
+      {
+        ...serializeWebhookEndpoint(created as Record<string, unknown>),
+        secret,
+      },
       201
     );
   } catch (err) {

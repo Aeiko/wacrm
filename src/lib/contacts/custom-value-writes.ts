@@ -15,10 +15,14 @@ export function planCustomValueWrites(
 ): CustomValueWritePlan {
   const upserts: CustomValueRow[] = [];
   const clearedFieldIds: string[] = [];
+
   for (const [fieldId, raw] of Object.entries(values)) {
     const value = raw.trim();
-    if (value) upserts.push({ contact_id: contactId, custom_field_id: fieldId, value });
+
+    if (value)
+      upserts.push({ contact_id: contactId, custom_field_id: fieldId, value });
     else clearedFieldIds.push(fieldId);
   }
+
   return { upserts, clearedFieldIds };
 }

@@ -36,6 +36,7 @@ describe('parseListParams', () => {
       created_at: '2026-01-01T00:00:00Z',
       id: '11111111-1111-4111-8111-111111111111',
     });
+
     expect(parseListParams(req(`?cursor=${c}`)).cursor).toEqual({
       createdAt: '2026-01-01T00:00:00Z',
       id: '11111111-1111-4111-8111-111111111111',
@@ -50,6 +51,7 @@ describe('encode/decodeCursor round-trip', () => {
       created_at: '2026-06-30T12:00:00.123Z',
       id: 'abcdef01-2345-4678-8abc-def012345678',
     };
+
     expect(decodeCursor(encodeCursor(row))).toEqual({
       createdAt: '2026-06-30T12:00:00.123Z',
       id: 'abcdef01-2345-4678-8abc-def012345678',
@@ -69,6 +71,7 @@ describe('encode/decodeCursor round-trip', () => {
       '2026-01-01T00:00:00Z|x),or(account_id.neq.0',
       'utf8'
     ).toString('base64url');
+
     expect(decodeCursor(evil)).toBeNull();
   });
 
@@ -77,11 +80,13 @@ describe('encode/decodeCursor round-trip', () => {
       'not-a-date|11111111-1111-4111-8111-111111111111',
       'utf8'
     ).toString('base64url');
+
     expect(decodeCursor(bad)).toBeNull();
   });
 
   it('rejects timestamps Date.parse tolerates but that are not ISO 8601', () => {
     const id = '11111111-1111-4111-8111-111111111111';
+
     for (const ts of [
       '1',
       'Jan 1 2026',
@@ -96,6 +101,7 @@ describe('encode/decodeCursor round-trip', () => {
 
   it('accepts the timestamp shapes Postgres returns', () => {
     const id = '11111111-1111-4111-8111-111111111111';
+
     for (const ts of [
       '2026-01-01T00:00:00+00:00',
       '2026-01-01T00:00:00.123456+00:00',

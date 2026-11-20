@@ -25,7 +25,9 @@ export async function GET(
     const ctx = await requireApiKey(request, 'contacts:read');
     const { id } = await params;
     const contact = await getContactById(ctx.supabase, ctx.accountId, id);
+
     if (!contact) return fail('not_found', 'Contact not found', 404);
+
     return ok(contact);
   } catch (err) {
     return toApiErrorResponse(err);
@@ -44,12 +46,14 @@ export async function PATCH(
       string,
       unknown
     > | null;
+
     if (!body || typeof body !== 'object') {
       return fail('bad_request', 'Request body must be a JSON object', 400);
     }
 
     // Verify the contact is in this account before mutating anything.
     const existing = await getContactById(ctx.supabase, ctx.accountId, id);
+
     if (!existing) return fail('not_found', 'Contact not found', 404);
 
     // Build a partial update from the provided scalar fields. A field
@@ -57,9 +61,11 @@ export async function PATCH(
     // untouched); `null` clears it, a string sets it, and any other
     // type is a 400 rather than a silently-ignored no-op.
     const updates: Record<string, unknown> = {};
+
     for (const field of ['name', 'email', 'company'] as const) {
       if (!(field in body)) continue;
       const value = body[field];
+
       if (value === null || typeof value === 'string') {
         updates[field] = value;
       } else {
@@ -69,13 +75,16 @@ export async function PATCH(
 
     if (Object.keys(updates).length > 0) {
       updates.updated_at = new Date().toISOString();
+
       const { error } = await ctx.supabase
         .from('contacts')
         .update(updates)
         .eq('id', id)
         .eq('account_id', ctx.accountId);
+
       if (error) {
         console.error('[api/v1/contacts] update error:', error);
+
         return fail('internal', 'Failed to update contact', 500);
       }
     }
@@ -92,11 +101,17 @@ export async function PATCH(
     }
 
     const contact = await getContactById(ctx.supabase, ctx.accountId, id);
+
     return ok(contact);
   } catch (err) {
     if (err instanceof ContactError) {
-      return fail(err.status === 400 ? 'bad_request' : 'internal', err.message, err.status);
+      return fail(
+        err.status === 400 ? 'bad_request' : 'internal',
+        err.message,
+        err.status
+      );
     }
+
     return toApiErrorResponse(err);
   }
 }

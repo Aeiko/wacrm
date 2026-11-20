@@ -21,8 +21,10 @@ export function parseTagCell(value: string | undefined): string[] {
 
   for (const part of value.split(/[,;]/)) {
     const name = part.trim();
+
     if (!name) continue;
     const key = name.toLowerCase();
+
     if (seen.has(key)) continue;
     seen.add(key);
     names.push(name);
@@ -48,6 +50,7 @@ export interface ParseContactCsvResult {
 
 export function parseContactCsv(text: string): ParseContactCsvResult {
   const lines = text.trim().split(/\r?\n/);
+
   if (lines.length < 2) {
     return {
       rows: [],
@@ -62,6 +65,7 @@ export function parseContactCsv(text: string): ParseContactCsvResult {
     .map((h) => h.trim().toLowerCase().replace(/["']/g, ''));
 
   const phoneIdx = headers.indexOf('phone');
+
   if (phoneIdx === -1) {
     return {
       rows: [],
@@ -80,6 +84,7 @@ export function parseContactCsv(text: string): ParseContactCsvResult {
 
   for (let i = 1; i < lines.length; i++) {
     const line = lines[i].trim();
+
     if (!line) continue;
 
     const values = parseCsvLine(line);
@@ -134,6 +139,8 @@ function parseCsvLine(line: string): string[] {
       current += char;
     }
   }
+
   values.push(current.trim());
+
   return values;
 }

@@ -4,10 +4,13 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 // Mock the two collaborators `setContactTags` writes through so the
 // tests can assert exactly which joins it adds and removes.
 const resolveImportTagIds = vi.fn();
+
 vi.mock('@/lib/contacts/resolve-import-tags', () => ({
   resolveImportTagIds: (...args: unknown[]) => resolveImportTagIds(...args),
 }));
+
 const addContactTagAndDispatch = vi.fn();
+
 vi.mock('@/lib/contacts/tag-events', () => ({
   addContactTagAndDispatch: (...args: unknown[]) =>
     addContactTagAndDispatch(...args),
@@ -38,6 +41,7 @@ describe('serializeContact', () => {
         { tags: null }, // orphaned join — dropped
       ],
     };
+
     expect(serializeContact(row)).toEqual({
       id: 'c1',
       phone: '+14155550123',
@@ -62,6 +66,7 @@ describe('serializeContact', () => {
       created_at: 'a',
       updated_at: 'b',
     };
+
     expect(serializeContact(row).tags).toEqual([]);
   });
 });
@@ -99,6 +104,7 @@ describe('setContactTags', () => {
    */
   function fakeContactTagsDb(currentTagIds: string[]) {
     const removed: string[] = [];
+
     const builder = {
       select: () => ({
         eq: async () => ({
@@ -110,17 +116,21 @@ describe('setContactTags', () => {
         eq: () => ({
           in: async (_col: string, ids: string[]) => {
             removed.push(...ids);
+
             return { error: null };
           },
         }),
       }),
     };
+
     const db = {
       from: (table: string) => {
         expect(table).toBe('contact_tags');
+
         return builder;
       },
     } as unknown as SupabaseClient;
+
     return { db, removed };
   }
 
@@ -152,6 +162,7 @@ describe('setContactTags', () => {
     const added = addContactTagAndDispatch.mock.calls.map(
       ([input]) => (input as { tagId: string }).tagId
     );
+
     expect(added).toEqual(['tag-a']);
     expect(removed).toEqual(['tag-c']);
   });
@@ -164,6 +175,7 @@ describe('setContactTags', () => {
     const added = addContactTagAndDispatch.mock.calls.map(
       ([input]) => (input as { tagId: string }).tagId
     );
+
     expect(added.sort()).toEqual(['tag-a', 'tag-b']);
     expect(removed).toEqual([]);
   });
@@ -176,6 +188,7 @@ describe('setContactTags', () => {
     const added = addContactTagAndDispatch.mock.calls.map(
       ([input]) => (input as { tagId: string }).tagId
     );
+
     expect(added).toEqual(['tag-b']);
     expect(removed).toEqual([]);
   });

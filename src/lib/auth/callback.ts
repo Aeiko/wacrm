@@ -40,19 +40,25 @@ const MAX_NEXT_LENGTH = 2048;
  */
 export function safeNextPath(
   raw: string | null | undefined,
-  fallback: string = DEFAULT_NEXT_PATH,
+  fallback: string = DEFAULT_NEXT_PATH
 ): string {
   if (typeof raw !== 'string') return fallback;
   const value = raw.trim();
+
   if (value.length === 0 || value.length > MAX_NEXT_LENGTH) return fallback;
+
   if (!value.startsWith('/')) return fallback;
+
   if (value.length > 1 && (value[1] === '/' || value[1] === '\\')) {
     return fallback;
   }
+
   for (let i = 0; i < value.length; i++) {
     const code = value.charCodeAt(i);
+
     if (code < 0x20 || code === 0x7f) return fallback;
   }
+
   return value;
 }
 
@@ -90,10 +96,12 @@ export type EmailLink =
 
 export function parseEmailLink(params: URLSearchParams): EmailLink | null {
   const code = params.get('code')?.trim();
+
   if (code) return { kind: 'code', code };
 
   const tokenHash = params.get('token_hash')?.trim();
   const type = params.get('type');
+
   if (tokenHash && isEmailOtpType(type)) {
     return { kind: 'token_hash', tokenHash, type };
   }
@@ -108,11 +116,13 @@ export function parseEmailLink(params: URLSearchParams): EmailLink | null {
  * failure /login can explain precisely; everything else is generic.
  */
 export function parseSupabaseError(
-  params: URLSearchParams,
+  params: URLSearchParams
 ): CallbackFailure | null {
   const errorCode = params.get('error_code');
   const error = params.get('error');
+
   if (!errorCode && !error) return null;
+
   return errorCode === 'otp_expired' ? 'link_expired' : 'link_invalid';
 }
 

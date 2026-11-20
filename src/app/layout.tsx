@@ -1,11 +1,11 @@
-import type { Metadata, Viewport } from "next";
-import { NextIntlClientProvider } from 'next-intl';
-import { getLocale, getMessages, getTranslations } from 'next-intl/server';
-import { Inter } from "next/font/google";
-import Script from "next/script";
-import "./globals.css";
-import { ThemeProvider } from "@/hooks/use-theme";
-import { ThemedToaster } from "@/components/themed-toaster";
+import type { Metadata, Viewport } from 'next';
+import { english, getServerIntlConfig } from '@/i18n/config';
+import { IntlProvider } from '@/i18n/intl-provider';
+import { Inter } from 'next/font/google';
+import Script from 'next/script';
+import './globals.css';
+import { ThemeProvider } from '@/hooks/use-theme';
+import { ThemedToaster } from '@/components/themed-toaster';
 import {
   DEFAULT_MODE,
   DEFAULT_THEME,
@@ -13,32 +13,25 @@ import {
   MODES,
   STORAGE_KEY,
   THEME_IDS,
-} from "@/lib/themes";
+} from '@/lib/themes';
 
 const inter = Inter({
-  variable: "--font-sans",
-  subsets: ["latin"],
+  variable: '--font-sans',
+  subsets: ['latin'],
 });
 
-export async function generateMetadata(): Promise<Metadata> {
-  const t = await getTranslations("Metadata");
-  return {
-    ...metadata,
-    description: t("description"),
-  };
-}
-
-const metadata: Metadata = {
+export const metadata: Metadata = {
+  description: english.messages.Metadata.description,
   title: {
-    default: "wacrm",
-    template: "%s — wacrm",
+    default: 'wacrm',
+    template: '%s — wacrm',
   },
   robots: {
     index: false,
     follow: false,
   },
   icons: {
-    icon: [{ url: "/icon" }],
+    icon: [{ url: '/icon' }],
   },
   formatDetection: {
     email: false,
@@ -48,8 +41,8 @@ const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#020617",
-  colorScheme: "dark light",
+  themeColor: '#020617',
+  colorScheme: 'dark light',
 };
 
 // Inline boot script — runs before React hydrates so the user's
@@ -84,17 +77,16 @@ const THEME_BOOT_SCRIPT = `
 })();
 `;
 
-export default async function RootLayout({
+export default function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  const locale = await getLocale();
-  const messages = await getMessages();
+  const intl = getServerIntlConfig();
 
   return (
     <html
-      lang={locale}
+      lang={intl.locale}
       data-theme={DEFAULT_THEME}
       data-mode={DEFAULT_MODE}
       className={`${inter.variable} h-full antialiased`}
@@ -114,13 +106,13 @@ export default async function RootLayout({
           dangerouslySetInnerHTML={{ __html: THEME_BOOT_SCRIPT }}
         />
       </head>
-      <body className="min-h-full bg-background text-foreground font-sans">
-        <NextIntlClientProvider messages={messages} locale={locale}>
+      <body className="bg-background text-foreground min-h-full font-sans">
+        <IntlProvider {...intl}>
           <ThemeProvider>
             {children}
             <ThemedToaster />
           </ThemeProvider>
-        </NextIntlClientProvider>
+        </IntlProvider>
       </body>
     </html>
   );

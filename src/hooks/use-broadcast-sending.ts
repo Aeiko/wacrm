@@ -3,10 +3,7 @@
 import { useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
-import {
-  BATCH_SEND_ATTEMPTS,
-  batchRetryDelayMs,
-} from '@/lib/broadcast-retry';
+import { BATCH_SEND_ATTEMPTS, batchRetryDelayMs } from '@/lib/broadcast-retry';
 import {
   resolveAudienceContacts,
   type AudienceConfig,
@@ -61,7 +58,9 @@ export interface BroadcastSendOutcome {
 }
 
 interface UseBroadcastSendingReturn {
-  createAndSendBroadcast: (payload: BroadcastPayload) => Promise<BroadcastSendOutcome>;
+  createAndSendBroadcast: (
+    payload: BroadcastPayload
+  ) => Promise<BroadcastSendOutcome>;
   isProcessing: boolean;
   progress: number;
 }
@@ -94,11 +93,13 @@ class DeliveryLeaseInterrupted extends Error {
 
 function heldLeaseOrThrow(result: DeliveryLeaseResult): string {
   if (result.status === 'held') return result.lease;
+
   if (result.status === 'error') {
     console.error('[broadcast] delivery lease renewal failed:', result.message);
   }
+
   throw new DeliveryLeaseInterrupted(
-    result.status === 'lost' ? 'lease_lost' : 'lease_error',
+    result.status === 'lost' ? 'lease_lost' : 'lease_error'
   );
 }
 
@@ -120,19 +121,22 @@ type CustomValueIndex = Map<string, Map<string, string>>;
 export function resolveVariables(
   variables: Record<string, VariableMapping>,
   contact: Contact,
-  customValues?: Map<string, string>,
+  customValues?: Map<string, string>
 ): string[] {
   // Keys are typically "1","2",... — numeric-aware sort keeps
   // {{1}} before {{10}}.
   const keys = Object.keys(variables).sort((a, b) => {
     const an = Number(a);
     const bn = Number(b);
+
     if (Number.isFinite(an) && Number.isFinite(bn)) return an - bn;
+
     return a.localeCompare(b);
   });
 
   return keys.map((key) => {
     const v = variables[key];
+
     if (v.type === 'static') return v.value;
 
     if (v.type === 'field') {
@@ -142,6 +146,7 @@ export function resolveVariables(
         email: contact.email,
         company: contact.company,
       };
+
       return fieldMap[v.value] ?? '';
     }
 
@@ -156,9 +161,10 @@ export function resolveVariables(
  */
 async function fetchCustomValueIndex(
   supabase: ReturnType<typeof createClient>,
-  contactIds: string[],
+  contactIds: string[]
 ): Promise<CustomValueIndex> {
   const index: CustomValueIndex = new Map();
+
   const rows = await fetchAllInChunks<
     { contact_id: string; custom_field_id: string; value: string | null },
     string
@@ -168,7 +174,7 @@ async function fetchCustomValueIndex(
       .select('contact_id, custom_field_id, value')
       .in('contact_id', slice)
       .order('id')
-      .range(from, to),
+      .range(from, to)
   );
 
   for (const row of rows) {
@@ -176,6 +182,7 @@ async function fetchCustomValueIndex(
     bucket.set(row.custom_field_id, row.value ?? '');
     index.set(row.contact_id, bucket);
   }
+
   return index;
 }
 
@@ -187,8 +194,9 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
 
   async function resolveAudience(audience: AudienceConfig): Promise<Contact[]> {
     const supabase = createClient();
+
     return resolveAudienceContacts(supabase, audience, (rows) =>
-      upsertCsvContacts(supabase, rows),
+      upsertCsvContacts(supabase, rows)
     );
   }
 
@@ -208,17 +216,20 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
    */
   async function upsertCsvContacts(
     supabase: ReturnType<typeof createClient>,
-    csvRows: { phone: string; name?: string }[],
+    csvRows: { phone: string; name?: string }[]
   ): Promise<Contact[]> {
     if (csvRows.length === 0) return [];
 
     const {
       data: { session },
     } = await supabase.auth.getSession();
+
     const user = session?.user;
+
     if (!user) {
       throw new Error(t('notSignedIn'));
     }
+
     if (!accountId) {
       throw new Error(t('notLinkedToAccount'));
     }
@@ -229,10 +240,13 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
     // and "15550100" survived as two rows and the insert below died on
     // a 23505, failing the whole broadcast.
     const uniqueByKey = new Map<string, { phone: string; name?: string }>();
+
     for (const row of csvRows) {
       const key = normalizeKey(row.phone);
+
       if (key && !uniqueByKey.has(key)) uniqueByKey.set(key, row);
     }
+
     const keys = [...uniqueByKey.keys()];
 
     // Single round-trip lookup of the contacts already in this ACCOUNT.
@@ -240,6 +254,7 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
     // account, so those numbers looked new and their inserts collided
     // with the account-wide unique index.
     let existing: Contact[];
+
     try {
       existing = await fetchAllInChunks<Contact, string>(
         keys,
@@ -250,7 +265,7 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
             .eq('account_id', accountId)
             .in('phone_normalized', slice)
             .order('id')
-            .range(from, to),
+            .range(from, to)
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -258,46 +273,64 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
     }
 
     const byKey = new Map<string, Contact>();
+
     for (const c of existing) {
       const key = normalizeKey(c.phone ?? '');
+
       if (key) byKey.set(key, c);
     }
 
     // Insert only missing contacts, in one batch per 200 rows (PostgREST
     // has a default payload cap — 200 keeps individual requests small).
-    const missing = keys
-      .filter((k) => !byKey.has(k))
-      .map((k) => uniqueByKey.get(k)!)
-      .map((row) => ({
-        user_id: user.id,
-        account_id: accountId,
-        phone: row.phone,
-        name: row.name ?? null,
-      }));
+    const missing = keys.flatMap((k) => {
+      if (byKey.has(k)) return [];
+
+      const row = uniqueByKey.get(k)!;
+
+      return [
+        {
+          user_id: user.id,
+          account_id: accountId,
+          phone: row.phone,
+          name: row.name ?? null,
+        },
+      ];
+    });
 
     const INSERT_CHUNK = 200;
+
     for (let i = 0; i < missing.length; i += INSERT_CHUNK) {
       const chunk = missing.slice(i, i + INSERT_CHUNK);
+
       const { data: inserted, error: insertErr } = await supabase
         .from('contacts')
         .insert(chunk)
         .select();
+
       if (insertErr) {
-        throw new Error(t('createCsvContactsFailed', { error: insertErr.message }));
+        throw new Error(
+          t('createCsvContactsFailed', { error: insertErr.message })
+        );
       }
+
       for (const c of (inserted ?? []) as Contact[]) {
         const key = normalizeKey(c.phone ?? '');
+
         if (key) byKey.set(key, c);
       }
     }
 
     // Preserve input order so analytics roughly matches the CSV order.
-    return keys
-      .map((k) => byKey.get(k))
-      .filter((c): c is Contact => Boolean(c));
+    return keys.flatMap((k) => {
+      const contact = byKey.get(k);
+
+      return contact ? [contact] : [];
+    });
   }
 
-  async function createAndSendBroadcast(payload: BroadcastPayload): Promise<BroadcastSendOutcome> {
+  async function createAndSendBroadcast(
+    payload: BroadcastPayload
+  ): Promise<BroadcastSendOutcome> {
     setIsProcessing(true);
     setProgress(0);
 
@@ -312,10 +345,13 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
       const {
         data: { session },
       } = await supabase.auth.getSession();
+
       const user = session?.user;
+
       if (!user) {
         throw new Error(t('notSignedIn'));
       }
+
       if (!accountId) {
         throw new Error(t('notLinkedToAccount'));
       }
@@ -330,6 +366,7 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
 
       // ── Step 2: Create broadcast row ──────────────────────────────
       setProgress(10);
+
       const { data: broadcast, error: broadcastError } = await supabase
         .from('broadcasts')
         .insert({
@@ -360,7 +397,7 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
         throw new Error(
           t('createBroadcastFailed', {
             error: broadcastError?.message ?? t('unknownErrorLower'),
-          }),
+          })
         );
       }
 
@@ -373,20 +410,23 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
       // column. Resolving once here also means the resume sends exactly
       // what this pass would have.
       setProgress(20);
+
       const customValueIndex = await fetchCustomValueIndex(
         supabase,
-        contacts.map((c) => c.id),
+        contacts.map((c) => c.id)
       );
+
       const paramsByContact = new Map(
         contacts.map((contact) => [
           contact.id,
           resolveVariables(
             payload.variables,
             contact,
-            customValueIndex.get(contact.id),
+            customValueIndex.get(contact.id)
           ),
-        ]),
+        ])
       );
+
       const recipientRows = contacts.map((contact) => ({
         broadcast_id: broadcast.id,
         contact_id: contact.id,
@@ -396,9 +436,11 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
 
       for (let i = 0; i < recipientRows.length; i += INSERT_BATCH_SIZE) {
         const batch = recipientRows.slice(i, i + INSERT_BATCH_SIZE);
+
         const { error: recipientError } = await supabase
           .from('broadcast_recipients')
           .insert(batch);
+
         if (recipientError) {
           // Previous impl logged and marched on — the broadcast then ran
           // with an incomplete recipient set, so webhook status updates
@@ -417,7 +459,7 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
             t('insertRecipientBatchFailed', {
               batch: i / INSERT_BATCH_SIZE + 1,
               error: recipientError.message,
-            }),
+            })
           );
         }
       }
@@ -425,15 +467,15 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
       // ── Step 4: Fetch recipients back (joined contact) ────────────
       setProgress(30);
       let recipients: BroadcastRecipient[];
+
       try {
-        recipients = await fetchAllPages<BroadcastRecipient>(
-          (from, to) =>
-            supabase
-              .from('broadcast_recipients')
-              .select('*, contact:contacts(*)')
-              .eq('broadcast_id', broadcast.id)
-              .order('id')
-              .range(from, to),
+        recipients = await fetchAllPages<BroadcastRecipient>((from, to) =>
+          supabase
+            .from('broadcast_recipients')
+            .select('*, contact:contacts(*)')
+            .eq('broadcast_id', broadcast.id)
+            .order('id')
+            .range(from, to)
         );
       } catch {
         throw new Error(t('fetchRecipientsFailed'));
@@ -447,22 +489,27 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
       // to all recipients; falls back to the template's stored URL on the
       // server when omitted.
       const headerType = payload.template.header_type;
+
       const isMediaHeader =
         headerType === 'image' ||
         headerType === 'video' ||
         headerType === 'document';
+
       const headerMediaUrl = payload.headerMediaUrl?.trim();
+
       const messageParams =
         isMediaHeader && headerMediaUrl ? { headerMediaUrl } : undefined;
 
       let heldLease: string | null = null;
+
       const keepDeliveryLease = async () => {
         heldLease = heldLeaseOrThrow(
           heldLease === null
             ? await acquireWizardDeliveryLease(supabase, broadcast.id)
-            : await renewWizardDeliveryLease(supabase, broadcast.id, heldLease),
+            : await renewWizardDeliveryLease(supabase, broadcast.id, heldLease)
         );
       };
+
       let interruption: BroadcastSendInterruption | null = null;
 
       for (let i = 0; i < recipients.length; i += SEND_BATCH_SIZE) {
@@ -470,13 +517,18 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
 
         const apiRecipients = batch
           .filter((r) => r.contact?.phone)
-          .map((r) => ({
-            phone: r.contact!.phone as string,
-            // Read back off the row rather than re-resolved, so this
-            // pass and any later resume send identical params.
-            params: Array.isArray(r.template_params) ? r.template_params : [],
-            ...(messageParams ? { messageParams } : {}),
-          }));
+          .map((r) => {
+            const recipient = {
+              phone: r.contact!.phone as string,
+              // Read back off the row rather than re-resolved, so this
+              // pass and any later resume send identical params.
+              params: Array.isArray(r.template_params) ? r.template_params : [],
+            };
+
+            if (messageParams) return { ...recipient, messageParams };
+
+            return recipient;
+          });
 
         if (apiRecipients.length === 0) continue;
 
@@ -493,11 +545,13 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
           // whole batch off as failed. Only 429 is replayed — see
           // batchRetryDelayMs for why nothing else can be.
           let data: { error?: string; results?: BroadcastApiResult[] } = {};
+
           for (let attempt = 1; ; attempt++) {
             const res = await fetch('/api/whatsapp/broadcast', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
+                broadcast_id: broadcast.id,
                 recipients: apiRecipients,
                 template_name: payload.template.name,
                 template_language: payload.template.language ?? 'en_US',
@@ -505,20 +559,24 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
             });
 
             data = await res.json();
+
             if (res.ok) break;
 
             const retryIn =
               attempt < BATCH_SEND_ATTEMPTS
                 ? batchRetryDelayMs(res.status, res.headers.get('Retry-After'))
                 : null;
+
             if (retryIn === null) {
               throw new Error(data.error || t('apiRequestFailed'));
             }
+
             await sleep(retryIn);
             await keepDeliveryLease();
           }
 
           const resultsByPhone = new Map<string, BroadcastApiResult>();
+
           for (const r of (data.results ?? []) as BroadcastApiResult[]) {
             resultsByPhone.set(r.phone, r);
           }
@@ -565,13 +623,15 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
             interruption = err.interruption;
             break;
           }
+
           for (const recipient of batch) {
             failedCount++;
             await supabase
               .from('broadcast_recipients')
               .update({
                 status: 'failed',
-                error_message: err instanceof Error ? err.message : t('unknownError'),
+                error_message:
+                  err instanceof Error ? err.message : t('unknownError'),
               })
               .eq('id', recipient.id);
           }
@@ -579,6 +639,7 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
 
         const progressPct =
           30 + Math.round(((i + batch.length) / totalRecipients) * 60);
+
         setProgress(progressPct);
 
         if (i + SEND_BATCH_SIZE < recipients.length) {
@@ -590,18 +651,22 @@ export function useBroadcastSending(): UseBroadcastSendingReturn {
       // Aggregate counts are maintained by the DB trigger (migration
       // 003); we only flip the final status here.
       setProgress(95);
+
       if (!interruption) {
         const finalStatus = failedCount === totalRecipients ? 'failed' : 'sent';
+
         const finalize = supabase
           .from('broadcasts')
           .update({ status: finalStatus, delivery_lease_until: null })
           .eq('id', broadcast.id);
+
         await (heldLease === null
           ? finalize.is('delivery_lease_until', null)
           : finalize.eq('delivery_lease_until', heldLease));
       }
 
       setProgress(100);
+
       return { broadcastId: broadcast.id, interruption };
     } finally {
       setIsProcessing(false);

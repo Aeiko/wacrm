@@ -1,6 +1,6 @@
-import { downloadMedia } from "./meta-api";
-import { extensionForMime } from "@/lib/media/filename";
-import { buildMediaPath, MEDIA_MAX_BYTES } from "@/lib/storage/upload-media";
+import { downloadMedia } from './meta-api';
+import { extensionForMime } from '@/lib/media/filename';
+import { buildMediaPath, MEDIA_MAX_BYTES } from '@/lib/storage/upload-media';
 
 /**
  * Copies inbound WhatsApp media into the `chat-media` bucket so it
@@ -29,14 +29,22 @@ export interface MirrorStorage {
     upload(
       path: string,
       body: Uint8Array | Buffer,
-      options: { contentType: string; cacheControl: string; upsert: boolean },
+      options: {
+        contentType: string;
+        cacheControl: string;
+        upsert: boolean;
+        metadata: {
+          connection_config_id: string;
+          connection_generation: string;
+        };
+      }
     ): Promise<{ error: { message: string } | null }>;
     getPublicUrl(path: string): { data: { publicUrl: string } };
   };
 }
 
 /** Bucket the composer already writes to; inbound joins it. */
-export const MIRROR_BUCKET = "chat-media";
+export const MIRROR_BUCKET = 'chat-media';
 
 /**
  * Second path segment for mirrored inbound objects, so a bucket listing
@@ -44,13 +52,16 @@ export const MIRROR_BUCKET = "chat-media";
  * matches on the FIRST segment (`account-<id>`, migration 023), so an
  * extra level is free.
  */
-export const MIRROR_FOLDER = "inbound";
+export const MIRROR_FOLDER = 'inbound';
 
 export interface MirrorInboundMediaArgs {
   /** Service-role `supabase.storage` — RLS is bypassed, MIME/size limits are not. */
   storage: MirrorStorage;
   /** Tenant. Drives the account-scoped path the bucket's policies expect. */
   accountId: string;
+  /** Captured origin; Storage must reject publication after a connection epoch switch. */
+  connectionConfigId: string;
+  connectionGeneration: string;
   /** Meta's media id. Makes the object path deterministic. */
   mediaId: string;
   /** Short-lived CDN URL from `getMediaUrl`. */
@@ -76,8 +87,9 @@ export interface MirrorInboundMediaArgs {
  */
 export function normalizeMimeType(value?: string | null): string | null {
   if (!value) return null;
-  const base = value.split(";")[0].trim().toLowerCase();
-  return base.includes("/") ? base : null;
+  const base = value.split(';')[0].trim().toLowerCase();
+
+  return base.includes('/') ? base : null;
 }
 
 /**
@@ -86,11 +98,14 @@ export function normalizeMimeType(value?: string | null): string | null {
  * than the MIME top-level (`application/*` reads as "document").
  */
 function kindForMime(mimeType: string | null): string {
-  if (!mimeType) return "file";
-  const [top] = mimeType.split("/");
-  if (top === "image" || top === "video" || top === "audio") return top;
-  if (top === "text" || top === "application") return "document";
-  return "file";
+  if (!mimeType) return 'file';
+  const [top] = mimeType.split('/');
+
+  if (top === 'image' || top === 'video' || top === 'audio') return top;
+
+  if (top === 'text' || top === 'application') return 'document';
+
+  return 'file';
 }
 
 /**
@@ -123,11 +138,12 @@ export function mirrorFileName(args: {
   // it. Strip any directory part and its extension — `buildMediaPath`
   // re-derives the extension from whatever we hand it, and we'd rather
   // that come from the MIME type than from a sender-controlled string.
-  const stem = (fileName ?? "")
+  const stem = (fileName ?? '')
     .split(/[\\/]/)
     .pop()!
-    .replace(/\.[^.]+$/, "")
+    .replace(/\.[^.]+$/, '')
     .trim();
+
   if (stem) return `${mediaId}-${stem}.${ext}`;
 
   // Otherwise synthesise. The message timestamp is in the name so that
@@ -135,7 +151,8 @@ export function mirrorFileName(args: {
   // the same name — and it's Meta's timestamp, not the clock, so the
   // path stays deterministic across a redelivery.
   const kind = kindForMime(mimeType);
-  const stamp = String(messageTimestamp ?? "").replace(/\D/g, "");
+  const stamp = String(messageTimestamp ?? '').replace(/\D/g, '');
+
   return `${mediaId}-${stamp ? `${kind}-${stamp}` : kind}.${ext}`;
 }
 
@@ -147,11 +164,13 @@ export function mirrorFileName(args: {
  *          proxy URL.
  */
 export async function mirrorInboundMedia(
-  args: MirrorInboundMediaArgs,
+  args: MirrorInboundMediaArgs
 ): Promise<string | null> {
   const {
     storage,
     accountId,
+    connectionConfigId,
+    connectionGeneration,
     mediaId,
     downloadUrl,
     accessToken,
@@ -168,23 +187,28 @@ export async function mirrorInboundMedia(
   // rejects anything past its 16 MB `file_size_limit` anyway, and Meta
   // allows documents up to 100 MB, so this is a real case rather than a
   // defensive one.
-  if (typeof fileSize === "number" && fileSize > MEDIA_MAX_BYTES) {
+  if (typeof fileSize === 'number' && fileSize > MEDIA_MAX_BYTES) {
     console.warn(
-      `[mirror-media] skipping ${mediaId}: ${fileSize} bytes exceeds the ${MEDIA_MAX_BYTES}-byte bucket limit`,
+      `[mirror-media] skipping ${mediaId}: ${fileSize} bytes exceeds the ${MEDIA_MAX_BYTES}-byte bucket limit`
     );
+
     return null;
   }
 
   try {
-    const { buffer, contentType } = await download({ downloadUrl, accessToken });
+    const { buffer, contentType } = await download({
+      downloadUrl,
+      accessToken,
+    });
 
     // Meta's `file_size` is advisory; the transfer is the truth. Check
     // again so an understated size can't push a rejected upload onto
     // the bucket.
     if (buffer.byteLength > MEDIA_MAX_BYTES) {
       console.warn(
-        `[mirror-media] skipping ${mediaId}: downloaded ${buffer.byteLength} bytes, over the ${MEDIA_MAX_BYTES}-byte bucket limit`,
+        `[mirror-media] skipping ${mediaId}: downloaded ${buffer.byteLength} bytes, over the ${MEDIA_MAX_BYTES}-byte bucket limit`
       );
+
       return null;
     }
 
@@ -194,7 +218,7 @@ export async function mirrorInboundMedia(
     const uploadType =
       normalizedMime ??
       normalizeMimeType(contentType) ??
-      "application/octet-stream";
+      'application/octet-stream';
 
     const objectName = mirrorFileName({
       mediaId,
@@ -202,6 +226,7 @@ export async function mirrorInboundMedia(
       fileName,
       messageTimestamp,
     });
+
     // `null` suppresses buildMediaPath's wall-clock stamp: the media id
     // already makes this path unique AND stable, and it's the stability
     // that makes a redelivery idempotent rather than duplicative.
@@ -212,29 +237,37 @@ export async function mirrorInboundMedia(
     // instead of erroring or orphaning a duplicate.
     const { error } = await storage.from(MIRROR_BUCKET).upload(path, buffer, {
       contentType: uploadType,
-      cacheControl: "3600",
+      cacheControl: '3600',
       upsert: true,
+      metadata: {
+        connection_config_id: connectionConfigId,
+        connection_generation: connectionGeneration,
+      },
     });
+
     if (error) {
       // Most likely a MIME outside the bucket's allow-list (migration
       // 039 covers what Meta realistically sends, but a document can be
       // any type at all). Log and let the caller keep the proxy URL.
       console.warn(
         `[mirror-media] upload failed for ${mediaId} (${uploadType}):`,
-        error.message,
+        error.message
       );
+
       return null;
     }
 
     const {
       data: { publicUrl },
     } = storage.from(MIRROR_BUCKET).getPublicUrl(path);
+
     return publicUrl || null;
   } catch (error) {
     console.warn(
       `[mirror-media] could not mirror ${mediaId}:`,
-      error instanceof Error ? error.message : error,
+      error instanceof Error ? error.message : error
     );
+
     return null;
   }
 }

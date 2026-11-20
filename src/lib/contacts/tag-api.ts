@@ -14,12 +14,15 @@ async function mutateContactTag(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ tag_id: tagId }),
   });
+
   const body = (await response.json().catch(() => ({}))) as {
     error?: string;
   } & ContactTagMutationResult;
+
   if (!response.ok) {
     throw new Error(body.error ?? 'Failed to update contact tag');
   }
+
   return body;
 }
 

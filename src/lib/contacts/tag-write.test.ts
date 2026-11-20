@@ -13,17 +13,20 @@ interface FakeOptions {
 function fakeDb(options: FakeOptions = {}): SupabaseClient {
   const contact =
     options.contact === undefined ? { id: 'contact-1' } : options.contact;
+
   const tag = options.tag === undefined ? { id: 'tag-1' } : options.tag;
 
   return {
     from(table: string) {
       const state = { operation: 'select' };
+
       const builder = {
         select() {
           return builder;
         },
         insert() {
           state.operation = 'insert';
+
           return builder;
         },
         eq() {
@@ -32,8 +35,10 @@ function fakeDb(options: FakeOptions = {}): SupabaseClient {
         maybeSingle() {
           if (table === 'contacts')
             return Promise.resolve({ data: contact, error: null });
+
           if (table === 'tags')
             return Promise.resolve({ data: tag, error: null });
+
           if (table === 'contact_tags' && state.operation === 'insert') {
             return Promise.resolve({
               data:
@@ -43,9 +48,11 @@ function fakeDb(options: FakeOptions = {}): SupabaseClient {
               error: options.insertError ?? null,
             });
           }
+
           return Promise.resolve({ data: null, error: null });
         },
       };
+
       return builder;
     },
   } as unknown as SupabaseClient;
@@ -73,6 +80,7 @@ describe('addContactTagIfAbsent', () => {
       insertData: null,
       insertError: { code: '23505', message: 'duplicate key' },
     });
+
     await expect(addContactTagIfAbsent(db, input)).resolves.toBe(false);
   });
 
@@ -91,6 +99,7 @@ describe('addContactTagIfAbsent', () => {
         throw new Error('should not query');
       },
     } as unknown as SupabaseClient;
+
     await expect(
       addContactTagIfAbsent(db, { ...input, tagId: 'not-a-uuid' })
     ).rejects.toMatchObject({ status: 400 });
@@ -107,6 +116,7 @@ describe('addContactTagIfAbsent', () => {
       insertData: null,
       insertError: { code: '42501', message: 'permission denied' },
     });
+
     await expect(addContactTagIfAbsent(db, input)).rejects.toThrow(
       'Failed to add contact tag: permission denied'
     );

@@ -26,7 +26,9 @@ describe('serializeConversation', () => {
     const out = serializeConversation(conv);
     expect(out).not.toHaveProperty('user_id');
     expect(out).not.toHaveProperty('account_id');
-    expect(out.contact?.tags).toEqual([{ id: 't1', name: 'vip', color: '#fff' }]);
+    expect(out.contact?.tags).toEqual([
+      { id: 't1', name: 'vip', color: '#fff' },
+    ]);
     expect(out.unread_count).toBe(2);
   });
 });
@@ -43,6 +45,7 @@ describe('serializeMessage', () => {
       status: 'delivered',
       created_at: '2026-01-01T00:00:00Z',
     } as unknown as Message;
+
     const outMsg = serializeMessage(inbound);
     expect(outMsg.direction).toBe('inbound');
     expect(outMsg.whatsapp_message_id).toBe('wamid.123');

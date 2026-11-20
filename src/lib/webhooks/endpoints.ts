@@ -49,8 +49,7 @@ export function serializeWebhookEndpoint(
 }
 
 export type WebhookUrlCheck =
-  | { ok: true; url: string }
-  | { ok: false; message: string };
+  { ok: true; url: string } | { ok: false; message: string };
 
 /**
  * Validate a webhook target URL: must be a well-formed absolute
@@ -62,14 +61,18 @@ export function checkWebhookUrl(input: unknown): WebhookUrlCheck {
     ok: false,
     message: "'url' must be a valid https:// URL",
   };
+
   if (typeof input !== 'string') return invalid;
   let u: URL;
+
   try {
     u = new URL(input.trim());
   } catch {
     return invalid;
   }
+
   if (u.protocol !== 'https:') return invalid;
+
   if (u.username || u.password) {
     return {
       ok: false,
@@ -77,5 +80,6 @@ export function checkWebhookUrl(input: unknown): WebhookUrlCheck {
         "'url' must not contain a username or password; authenticate deliveries with the signing secret instead",
     };
   }
+
   return { ok: true, url: u.toString() };
 }

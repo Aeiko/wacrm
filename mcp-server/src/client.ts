@@ -7,7 +7,11 @@
 // cleanly. Nothing here knows about MCP — it's just the CRM API.
 // ============================================================
 
+import { z } from 'zod';
 import type { Config } from './config.js';
+
+const apiError = z.object({ error: z.object({ code: z.string().optional(), message: z.string().optional() }).optional() });
+const apiResult = z.object({ data: z.unknown(), meta: z.object({ next_cursor: z.string().nullable() }).optional() });
 
 /** A structured error from the wacrm API envelope (`{ error: { code, message } }`). */
 export class WacrmApiError extends Error {
@@ -42,6 +46,7 @@ export class WacrmClient {
     options: { query?: Record<string, string | number | undefined>; body?: unknown } = {},
   ): Promise<{ data: T; meta?: { next_cursor: string | null } }> {
     const url = new URL(`${this.baseUrl}/api/v1${path}`);
+
     if (options.query) {
       for (const [key, value] of Object.entries(options.query)) {
         if (value !== undefined && value !== null && value !== '') {
@@ -54,11 +59,13 @@ export class WacrmClient {
       Authorization: `Bearer ${this.apiKey}`,
       Accept: 'application/json',
     };
+
     if (options.body !== undefined) {
       headers['Content-Type'] = 'application/json';
     }
 
     let res: Response;
+
     try {
       res = await fetch(url, {
         method,
@@ -69,13 +76,14 @@ export class WacrmClient {
       throw new WacrmApiError(
         0,
         'network_error',
-        `Could not reach wacrm at ${this.baseUrl}: ${(err as Error).message}`,
+        `Could not reach wacrm at ${this.baseUrl}: ${err instanceof Error ? err.message : 'request failed'}`,
       );
     }
 
     // 429s carry a Retry-After we surface to the model.
     let payload: unknown = undefined;
     const text = await res.text();
+
     if (text) {
       try {
         payload = JSON.parse(text);
@@ -88,18 +96,27 @@ export class WacrmClient {
     }
 
     if (!res.ok) {
-      const envelope = payload as { error?: { code?: string; message?: string } } | undefined;
+      const envelope = apiError.safeParse(payload).data;
       const code = envelope?.error?.code ?? 'internal';
       let message = envelope?.error?.message ?? `Request failed with status ${res.status}`;
+
       if (res.status === 429) {
         const retryAfter = res.headers.get('Retry-After');
+
         if (retryAfter) message += ` (retry after ${retryAfter}s)`;
       }
+
       throw new WacrmApiError(res.status, code, message);
     }
 
-    const envelope = payload as { data: T; meta?: { next_cursor: string | null } };
-    return { data: envelope.data, meta: envelope.meta };
+    const envelope = apiResult.safeParse(payload).data;
+
+    if (!envelope || !Object.hasOwn(envelope, 'data')) {
+      throw new WacrmApiError(res.status, 'internal', 'Invalid API response');
+    }
+
+    // SAFETY: The API envelope is validated above. The endpoint caller supplies its data contract.
+    return { data: envelope.data as T, meta: envelope.meta };
   }
 
   private async list<T>(
@@ -107,6 +124,7 @@ export class WacrmClient {
     query: Record<string, string | number | undefined>,
   ): Promise<Paginated<T>> {
     const res = await this.request<T[]>('GET', path, { query });
+
     return { data: res.data, next_cursor: res.meta?.next_cursor ?? null };
   }
 

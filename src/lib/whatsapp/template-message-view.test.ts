@@ -37,6 +37,7 @@ describe('templateMessageView', () => {
       { media_url: 'https://cdn.example.com/sent.png' },
       IMAGE_TEMPLATE
     );
+
     expect(view.header).toEqual({
       type: 'image',
       url: 'https://cdn.example.com/sent.png',
@@ -62,6 +63,7 @@ describe('templateMessageView', () => {
       {},
       template({ header_type: 'document', header_media_url: undefined })
     );
+
     expect(view.header).toEqual({ type: 'document', url: null });
   });
 
@@ -70,6 +72,7 @@ describe('templateMessageView', () => {
       {},
       template({ header_type: 'text', header_content: 'Order update' })
     );
+
     expect(view.header).toEqual({ type: 'text', text: 'Order update' });
   });
 
@@ -104,7 +107,9 @@ describe('matchMessageTemplate', () => {
 
   it('returns null for another name or no name', () => {
     expect(
-      matchMessageTemplate(message({ template_name: 'other' }), [IMAGE_TEMPLATE])
+      matchMessageTemplate(message({ template_name: 'other' }), [
+        IMAGE_TEMPLATE,
+      ])
     ).toBeNull();
     expect(
       matchMessageTemplate(message({ template_name: undefined }), [
@@ -115,11 +120,13 @@ describe('matchMessageTemplate', () => {
 
   it('picks the translation whose body matches the stored text', () => {
     const english = template({ id: 'en', language: 'en_US' });
+
     const spanish = template({
       id: 'es',
       language: 'es',
       body_text: 'Tu pedido {{1}} sale el {{2}}',
     });
+
     expect(
       matchMessageTemplate(
         message({ content_text: 'Tu pedido A1 sale el viernes' }),
@@ -132,7 +139,11 @@ describe('matchMessageTemplate', () => {
   });
 
   it('treats regex characters in the body literally', () => {
-    const priced = template({ id: 'priced', body_text: 'Total (USD): ${{1}}?' });
+    const priced = template({
+      id: 'priced',
+      body_text: 'Total (USD): ${{1}}?',
+    });
+
     const other = template({ id: 'other', body_text: 'Total USD {{1}}' });
     expect(
       matchMessageTemplate(message({ content_text: 'Total (USD): $9?' }), [

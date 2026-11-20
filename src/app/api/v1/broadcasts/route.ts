@@ -35,6 +35,7 @@ import { requireApiKey } from '@/lib/auth/api-context';
 // still exceed 60s, so very large sends should be split across
 // requests. A durable queue/cron drain is the complete fix (follow-up).
 export const maxDuration = 60;
+
 import { ok, fail, toApiErrorResponse } from '@/lib/api/v1/respond';
 import { resolveAuditUserId, ContactError } from '@/lib/api/v1/contacts';
 import {
@@ -51,28 +52,35 @@ export async function POST(request: Request) {
       string,
       unknown
     > | null;
+
     if (!body || typeof body !== 'object') {
       return fail('bad_request', 'Request body must be a JSON object', 400);
     }
 
     const templateName =
       typeof body.template_name === 'string' ? body.template_name : '';
+
     const recipients = Array.isArray(body.recipients) ? body.recipients : [];
 
     const auditUserId = await resolveAuditUserId(ctx.supabase, ctx.accountId);
 
-    const plan = await createBroadcast(ctx.supabase, ctx.accountId, auditUserId, {
-      name: typeof body.name === 'string' ? body.name : null,
-      templateName,
-      templateLanguage:
-        typeof body.template_language === 'string'
-          ? body.template_language
-          : null,
-      recipients: recipients.map((r) => ({
-        to: typeof r?.to === 'string' ? r.to : '',
-        params: Array.isArray(r?.params) ? r.params : undefined,
-      })),
-    });
+    const plan = await createBroadcast(
+      ctx.supabase,
+      ctx.accountId,
+      auditUserId,
+      {
+        name: typeof body.name === 'string' ? body.name : null,
+        templateName,
+        templateLanguage:
+          typeof body.template_language === 'string'
+            ? body.template_language
+            : null,
+        recipients: recipients.map((r) => ({
+          to: typeof r?.to === 'string' ? r.to : '',
+          params: Array.isArray(r?.params) ? r.params : undefined,
+        })),
+      }
+    );
 
     // Fan out after the response is sent. Uses the same service-role
     // client — no request-scoped auth needed for the Meta calls or
@@ -94,6 +102,7 @@ export async function POST(request: Request) {
     if (err instanceof BroadcastError) {
       return fail(err.code, err.message, err.status);
     }
+
     if (err instanceof ContactError) {
       return fail(
         err.status === 400 ? 'bad_request' : 'internal',
@@ -101,6 +110,7 @@ export async function POST(request: Request) {
         err.status
       );
     }
+
     return toApiErrorResponse(err);
   }
 }

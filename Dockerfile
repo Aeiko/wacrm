@@ -5,7 +5,7 @@
 # ---------------------------------------------------------------
 FROM node:22-alpine AS deps
 WORKDIR /app
-COPY package.json package-lock.json ./
+COPY package.json package-lock.json .npmrc ./
 RUN npm ci
 
 # ---------------------------------------------------------------
@@ -25,14 +25,13 @@ COPY . .
 ARG NEXT_PUBLIC_SUPABASE_URL
 ARG NEXT_PUBLIC_SUPABASE_ANON_KEY
 ARG NEXT_PUBLIC_SITE_URL
-ARG NEXT_PUBLIC_APP_LOCALE=en
 ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL \
     NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY \
     NEXT_PUBLIC_SITE_URL=$NEXT_PUBLIC_SITE_URL \
-    NEXT_PUBLIC_APP_LOCALE=$NEXT_PUBLIC_APP_LOCALE \
     NEXT_TELEMETRY_DISABLED=1
 
 RUN npm run build
+RUN --network=none node supabase/ci/fix-standalone-image-matcher.mjs .next/standalone .next/static public
 
 # ---------------------------------------------------------------
 # Stage 3 — minimal runtime (standalone output)

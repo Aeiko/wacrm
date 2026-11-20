@@ -18,7 +18,13 @@ describe('isPrivateOrReservedIp', () => {
   });
 
   it('allows public IPv4', () => {
-    for (const ip of ['8.8.8.8', '1.1.1.1', '172.15.0.1', '172.32.0.1', '93.184.216.34']) {
+    for (const ip of [
+      '8.8.8.8',
+      '1.1.1.1',
+      '172.15.0.1',
+      '172.32.0.1',
+      '93.184.216.34',
+    ]) {
       expect(isPrivateOrReservedIp(ip)).toBe(false);
     }
   });
@@ -54,6 +60,7 @@ describe('isPrivateOrReservedIp', () => {
     ]) {
       expect(isPrivateOrReservedIp(ip)).toBe(true);
     }
+
     expect(isPrivateOrReservedIp('2606:4700:4700::1111')).toBe(false);
     expect(isPrivateOrReservedIp('::ffff:8.8.8.8')).toBe(false);
   });
@@ -71,6 +78,7 @@ describe('isPrivateOrReservedIp', () => {
     ]) {
       expect(isPrivateOrReservedIp(ip)).toBe(true);
     }
+
     expect(isPrivateOrReservedIp('::ffff:808:808')).toBe(false); // 8.8.8.8
   });
 
@@ -90,12 +98,21 @@ describe('isPrivateOrReservedIp', () => {
     ]) {
       expect(isPrivateOrReservedIp(ip)).toBe(true);
     }
+
     // A 6to4 address wrapping public IPv4 space is still routable.
     expect(isPrivateOrReservedIp('2002:808:808::')).toBe(false);
   });
 
   it('fails closed on anything it cannot parse', () => {
-    for (const ip of ['', 'not-an-ip', '1.2.3', '1.2.3.4.5', '256.1.1.1', 'gg::1', '::1::2']) {
+    for (const ip of [
+      '',
+      'not-an-ip',
+      '1.2.3',
+      '1.2.3.4.5',
+      '256.1.1.1',
+      'gg::1',
+      '::1::2',
+    ]) {
       expect(isPrivateOrReservedIp(ip)).toBe(true);
     }
   });
@@ -104,7 +121,9 @@ describe('isPrivateOrReservedIp', () => {
 describe('isDeliverableUrl', () => {
   it('rejects literal private IPs and internal names without DNS', async () => {
     expect(await isDeliverableUrl('https://127.0.0.1/hook')).toBe(false);
-    expect(await isDeliverableUrl('https://169.254.169.254/latest/meta-data')).toBe(false);
+    expect(
+      await isDeliverableUrl('https://169.254.169.254/latest/meta-data')
+    ).toBe(false);
     expect(await isDeliverableUrl('https://[::1]/hook')).toBe(false);
     expect(await isDeliverableUrl('https://localhost/hook')).toBe(false);
     expect(await isDeliverableUrl('https://foo.internal/hook')).toBe(false);
@@ -133,22 +152,23 @@ describe('isDeliverableUrl', () => {
 
   it('allows a literal public IP', async () => {
     expect(await isDeliverableUrl('https://8.8.8.8/hook')).toBe(true);
-    expect(await isDeliverableUrl('https://[2606:4700:4700::1111]/hook')).toBe(true);
+    expect(await isDeliverableUrl('https://[2606:4700:4700::1111]/hook')).toBe(
+      true
+    );
   });
 });
-
 
 describe('isDeliverableUrl private host allow-list', () => {
   it('allows only an explicitly allow-listed private host', async () => {
     expect(
       await isDeliverableUrl('http://127.0.0.1:11434/hook', {
         allowPrivateHosts: ['127.0.0.1'],
-      }),
-    ).toBe(true)
+      })
+    ).toBe(true);
     expect(
       await isDeliverableUrl('http://127.0.0.1:11434/hook', {
         allowPrivateHosts: ['127.0.0.2'],
-      }),
-    ).toBe(false)
-  })
-})
+      })
+    ).toBe(false);
+  });
+});

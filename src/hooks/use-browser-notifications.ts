@@ -1,10 +1,10 @@
-"use client";
+'use client';
 
-import { useEffect, useRef, useSyncExternalStore } from "react";
-import { useRouter } from "next/navigation";
-import { useTranslations } from "next-intl";
-import { createClient } from "@/lib/supabase/client";
-import type { Message } from "@/types";
+import { useEffect, useRef, useSyncExternalStore } from 'react';
+import { useRouter } from 'next/navigation';
+import { useTranslations } from 'use-intl';
+import { createClient } from '@/lib/supabase/client';
+import type { Message } from '@/types';
 import {
   DEFAULT_NOTIFICATION_LABELS,
   buildNotificationContent,
@@ -13,10 +13,11 @@ import {
   pickContactDisplayName,
   readBrowserNotifyPref,
   shouldNotifyForMessage,
+  shouldNotifyForMessageUpdate,
   subscribeBrowserNotifyPref,
   viewedConversationFromLocation,
   type NotificationLabels,
-} from "@/lib/notifications/browser-notify";
+} from '@/lib/notifications/browser-notify';
 
 const serverSnapshot = () => false;
 
@@ -28,7 +29,7 @@ export function useBrowserNotifyPref(): boolean {
   return useSyncExternalStore(
     subscribeBrowserNotifyPref,
     readBrowserNotifyPref,
-    serverSnapshot,
+    serverSnapshot
   );
 }
 
@@ -37,7 +38,7 @@ export function useBrowserNotifyPref(): boolean {
  * per signed-in dashboard tab (the dashboard shell does this via
  * <BrowserNotificationsListener />) so alerts fire on any page.
  *
- * Listens for realtime INSERTs on `messages` — RLS scopes the stream to
+ * Listens for realtime INSERTs and history-to-live UPDATEs — RLS scopes the stream to
  * the caller's account, same as useTotalUnread / useRealtime. Only
  * live events are considered: there is no initial fetch, so an existing
  * backlog never produces a burst of alerts on page load.
@@ -51,7 +52,7 @@ export function useBrowserNotifyPref(): boolean {
 export function useBrowserNotifications(): void {
   const enabled = useBrowserNotifyPref();
   const router = useRouter();
-  const t = useTranslations("Settings.browserNotifications.labels");
+  const t = useTranslations('Settings.browserNotifications.labels');
 
   // Translated labels, read inside the async Realtime callback. Kept in
   // a ref (assigned in an effect, not during render) so a locale change
@@ -59,13 +60,13 @@ export function useBrowserNotifications(): void {
   const labelsRef = useRef<NotificationLabels>(DEFAULT_NOTIFICATION_LABELS);
   useEffect(() => {
     labelsRef.current = {
-      fallbackTitle: t("fallbackTitle"),
-      image: t("image"),
-      audio: t("audio"),
-      video: t("video"),
-      document: t("document"),
-      location: t("location"),
-      template: t("template"),
+      fallbackTitle: t('fallbackTitle'),
+      image: t('image'),
+      audio: t('audio'),
+      video: t('video'),
+      document: t('document'),
+      location: t('location'),
+      template: t('template'),
     };
   });
 
@@ -75,7 +76,8 @@ export function useBrowserNotifications(): void {
 
   useEffect(() => {
     if (!enabled) return;
-    if (getNotificationPermission() === "unsupported") return;
+
+    if (getNotificationPermission() === 'unsupported') return;
 
     const supabase = createClient();
     let cancelled = false;
@@ -84,19 +86,27 @@ export function useBrowserNotifications(): void {
       // One small select to put the contact's name in the title. A
       // failure here just means the generic fallback title.
       const { data } = await supabase
-        .from("conversations")
-        .select("contact:contacts(name, wa_username, phone)")
-        .eq("id", msg.conversation_id)
+        .from('conversations')
+        .select('contact:contacts(name, wa_username, phone)')
+        .eq('id', msg.conversation_id)
         .maybeSingle();
+
       if (cancelled) return;
 
-      const contact = (data as {
-        contact?: { name?: string | null; wa_username?: string | null; phone?: string | null } | null;
-      } | null)?.contact;
+      const contact = (
+        data as {
+          contact?: {
+            name?: string | null;
+            wa_username?: string | null;
+            phone?: string | null;
+          } | null;
+        } | null
+      )?.contact;
+
       const { title, body } = buildNotificationContent(
         msg,
         pickContactDisplayName(contact),
-        labelsRef.current,
+        labelsRef.current
       );
 
       try {
@@ -105,8 +115,9 @@ export function useBrowserNotifications(): void {
           // One alert per conversation: a second message from the same
           // customer replaces the first instead of stacking.
           tag: msg.conversation_id,
-          icon: "/icon",
+          icon: '/icon',
         });
+
         notification.onclick = () => {
           window.focus();
           router.push(conversationHref(msg.conversation_id));
@@ -115,31 +126,40 @@ export function useBrowserNotifications(): void {
       } catch (err) {
         // Some browsers throw from the constructor (e.g. Android Chrome
         // requires a service worker). Non-fatal.
-        console.error("[useBrowserNotifications] failed to show:", err);
+        console.error('[useBrowserNotifications] failed to show:', err);
       }
     };
 
     const channel = supabase
-      .channel("browser-notifications")
-      .on(
-        "postgres_changes",
-        { event: "INSERT", schema: "public", table: "messages" },
+      .channel('browser-notifications')
+      .on<Message>(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'messages' },
         (payload) => {
+          if (payload.eventType === 'DELETE') return;
+
           // Re-check every time: the user can revoke permission in the
           // browser without the preference flipping.
-          if (getNotificationPermission() !== "granted") return;
-          const msg = payload.new as Message;
-          const shouldNotify = shouldNotifyForMessage(msg, {
-            documentVisible: document.visibilityState === "visible",
+          if (getNotificationPermission() !== 'granted') return;
+          const msg = payload.new;
+
+          const options = {
+            documentVisible: document.visibilityState === 'visible',
             viewingConversationId: viewedConversationFromLocation(
               window.location.pathname,
-              window.location.search,
+              window.location.search
             ),
             seen: seenRef.current,
-          });
+          };
+
+          const shouldNotify =
+            payload.eventType === 'UPDATE'
+              ? shouldNotifyForMessageUpdate(msg, payload.old, options)
+              : shouldNotifyForMessage(msg, options);
+
           if (!shouldNotify) return;
           void notify(msg);
-        },
+        }
       )
       .subscribe();
 

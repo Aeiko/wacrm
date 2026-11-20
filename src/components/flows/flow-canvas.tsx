@@ -36,7 +36,14 @@
  * list view reads.
  */
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   applyNodeChanges,
   Background,
@@ -59,7 +66,7 @@ import {
 import '@xyflow/react/dist/style.css';
 import { Plus, Trash2 } from 'lucide-react';
 
-import { useTranslations } from 'next-intl';
+import { useTranslations } from 'use-intl';
 
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -78,7 +85,6 @@ import {
 } from '@/lib/flows/edges';
 import { autoLayout, shouldAutoLayout } from '@/lib/flows/layout';
 import {
-  NODE_META,
   NodeIconChip,
   groupNodeTypesByCategory,
   nodeColors,
@@ -108,6 +114,7 @@ interface NodeData extends Record<string, unknown> {
 }
 
 const NODE_WIDTH = 240;
+
 // Best-effort default; actual height varies by summary length but
 // dagre needs SOMETHING to compute rank spacing. Underestimating is
 // safer than over (tighter layout that still doesn't overlap).
@@ -127,16 +134,17 @@ function slotColor(nodeType: NodeType, slotId: string, fallback: string) {
   if (nodeType === 'condition' && slotId === 'true') {
     return nodeColors('start').solid;
   }
+
   if (nodeType === 'condition' && slotId === 'false') {
     return nodeColors('handoff').solid;
   }
+
   return fallback;
 }
 
 function FlowNodeCard({ data, selected }: NodeProps) {
   const t = useTranslations('Flows.builder');
   const { node, isEntry, isFlashed } = data as NodeData;
-  const meta = NODE_META[node.node_type];
   const c = nodeColors(node.node_type);
   const tSummary = useTranslations('Flows.summary');
   const summary = summarizeNode(node, tSummary);
@@ -151,6 +159,7 @@ function FlowNodeCard({ data, selected }: NodeProps) {
   // send_list) render slot rows inline so each handle visually sits
   // next to the slot it represents.
   const isMultiSlot = slots.length > 1;
+
   return (
     <div
       style={
@@ -275,6 +284,7 @@ export function FlowCanvas() {
 
 function FlowCanvasInner() {
   const t = useTranslations('Flows.builder');
+
   const {
     state,
     setState,
@@ -284,6 +294,7 @@ function FlowCanvasInner() {
     removeNode,
     flashKey,
   } = useFlowEditor();
+
   const reactFlow = useReactFlow();
   const builderNodes = state.nodes;
   const entryNodeId = state.entry_node_id;
@@ -292,6 +303,7 @@ function FlowCanvasInner() {
   // list view's analogue is the per-card expanded set in
   // flow-builder.tsx.
   const [selectedNodeKey, setSelectedNodeKey] = useState<string | null>(null);
+
   const selectedNode = useMemo(
     () =>
       selectedNodeKey
@@ -334,6 +346,7 @@ function FlowCanvasInner() {
   const derivedRfNodes = useMemo(() => {
     const nodes: RfNode<NodeData>[] = builderNodes.map((n) => {
       const fallback = autoLayoutPositions?.get(n.node_key);
+
       return {
         id: n.node_key,
         type: 'flow',
@@ -354,9 +367,26 @@ function FlowCanvasInner() {
 
   const [rfNodes, setRfNodes] = useState<RfNode<NodeData>[]>(derivedRfNodes);
 
-  useEffect(() => {
-    setRfNodes(derivedRfNodes);
-  }, [derivedRfNodes]);
+  const [previousDerivedNodes, setPreviousDerivedNodes] =
+    useState(derivedRfNodes);
+
+  if (previousDerivedNodes !== derivedRfNodes) {
+    setPreviousDerivedNodes(derivedRfNodes);
+    setRfNodes((current) => {
+      const byId = new Map(current.map((node) => [node.id, node]));
+
+      return derivedRfNodes.map((node) => {
+        const previous = byId.get(node.id);
+
+        return {
+          ...previous,
+          ...node,
+          // Context edits/validator flashes must not interrupt an active drag.
+          position: previous?.dragging ? previous.position : node.position,
+        };
+      });
+    });
+  }
 
   const rfEdges = useMemo(() => {
     const canvasEdges = deriveCanvasEdges(builderNodes);
@@ -408,6 +438,7 @@ function FlowCanvasInner() {
   useEffect(() => {
     if (!flashKey) return;
     const node = builderNodes.find((n) => n.node_key === flashKey);
+
     if (!node) return;
     const x = (node.position_x ?? 0) + NODE_WIDTH / 2;
     const y = (node.position_y ?? 0) + NODE_HEIGHT / 2;
@@ -439,19 +470,24 @@ function FlowCanvasInner() {
       ) {
         return;
       }
+
       const sourceNode = builderNodes.find(
         (n) => n.node_key === connection.source
       );
+
       if (!sourceNode) return;
+
       // Self-loops are a footgun (a button whose target is its own
       // node = infinite reprompt). Reject silently — the user can
       // still wire one via the per-node dropdown if they really want.
       if (connection.source === connection.target) return;
+
       const patch = applyEdgeConnection(
         sourceNode,
         connection.sourceHandle,
         connection.target
       );
+
       if (patch) updateNodeConfig(connection.source, patch);
     },
     [builderNodes, updateNodeConfig]
@@ -467,6 +503,7 @@ function FlowCanvasInner() {
     (deleted: RfNode<NodeData>[]) => {
       for (const n of deleted) {
         removeNode(n.id);
+
         if (selectedNodeKey === n.id) setSelectedNodeKey(null);
       }
     },
@@ -481,8 +518,10 @@ function FlowCanvasInner() {
       for (const e of deleted) {
         if (!e.sourceHandle) continue;
         const sourceNode = builderNodes.find((n) => n.node_key === e.source);
+
         if (!sourceNode) continue;
         const patch = applyEdgeConnection(sourceNode, e.sourceHandle, '');
+
         if (patch) updateNodeConfig(e.source, patch);
       }
     },
@@ -617,6 +656,7 @@ function NodeEditSheet({
   // Sheet is controlled — opens when a node is selected, closes via
   // Esc / overlay / close button (all delegated to onClose).
   const open = node !== null;
+
   if (!node) {
     return (
       <Sheet open={open} onOpenChange={(v) => !v && onClose()}>
@@ -624,8 +664,9 @@ function NodeEditSheet({
       </Sheet>
     );
   }
-  const meta = NODE_META[node.node_type];
+
   const c = nodeColors(node.node_type);
+
   return (
     <Sheet open={open} onOpenChange={(v) => !v && onClose()}>
       <SheetContent
@@ -636,7 +677,9 @@ function NodeEditSheet({
           <NodeIconChip type={node.node_type} size={36} iconSize={18} />
           <div className="min-w-0 flex-1">
             <SheetTitle className="flex items-center gap-2 text-[11px] font-semibold tracking-wider uppercase">
-              <span style={{ color: c.text }}>{t(`nodes.${node.node_type}.label`)}</span>
+              <span style={{ color: c.text }}>
+                {t(`nodes.${node.node_type}.label`)}
+              </span>
               {isEntry && (
                 <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-semibold tracking-wider text-emerald-300 uppercase">
                   {t('badgeEntry')}
@@ -716,12 +759,15 @@ function CanvasAddNodeButton({ t }: { t: ReturnType<typeof useTranslations> }) {
     // it (test envs, etc.), addNode's default (0, 0) is the fallback
     // and the user can drag the node into view.
     const root = document.querySelector('.react-flow') as HTMLElement | null;
+
     if (!root) return;
     const rect = root.getBoundingClientRect();
+
     const center = reactFlow.screenToFlowPosition({
       x: rect.left + rect.width / 2,
       y: rect.top + rect.height / 2,
     });
+
     // NODE_WIDTH / NODE_HEIGHT are the dagre layout defaults; offset
     // so the card sits visually centered rather than top-left at the
     // viewport center.
@@ -757,7 +803,6 @@ function CanvasAddNodeButton({ t }: { t: ReturnType<typeof useTranslations> }) {
                 {t(`categories.${group.id}`)}
               </DropdownMenuLabel>
               {group.types.map((t_type) => {
-                const meta = NODE_META[t_type];
                 return (
                   <DropdownMenuItem
                     key={t_type}

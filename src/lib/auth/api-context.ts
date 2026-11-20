@@ -58,8 +58,10 @@ export interface ApiKeyContext {
  */
 function extractKey(request: Request): string | null {
   const header = request.headers.get('authorization');
+
   if (!header) return null;
   const value = header.replace(/^\s*bearer\s+/i, '').trim();
+
   return value.length > 0 ? value : null;
 }
 
@@ -80,11 +82,13 @@ export async function requireApiKey(
   scope?: ApiScope
 ): Promise<ApiKeyContext> {
   const presented = extractKey(request);
+
   if (!presented || !looksLikeApiKey(presented)) {
     throw unauthorized();
   }
 
   const row = await findActiveKeyByHash(hashApiKey(presented));
+
   if (!row) {
     // Covers unknown, revoked, and expired keys alike — we don't
     // distinguish them on the wire so a probe can't learn whether a
@@ -95,6 +99,7 @@ export async function requireApiKey(
   // Rate-limit per key, before the scope check, so an unauthorized-
   // scope caller still can't hammer the endpoint for free.
   const limit = checkRateLimit(`apikey:${row.id}`, RATE_LIMITS.publicApi);
+
   if (!limit.success) {
     throw rateLimited(limit);
   }

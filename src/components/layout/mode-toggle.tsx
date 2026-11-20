@@ -5,7 +5,7 @@ import { Moon, Sun } from "lucide-react";
 import { useTheme } from "@/hooks/use-theme";
 import { cn } from "@/lib/utils";
 
-import { useTranslations } from "next-intl";
+import { useTranslations } from "use-intl";
 
 /**
  * Light/dark mode toggle — a single icon button that flips the app

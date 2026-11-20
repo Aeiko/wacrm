@@ -32,6 +32,7 @@ export async function GET(
       .eq('id', id)
       .eq('account_id', ctx.accountId)
       .maybeSingle();
+
     if (!conv) return fail('not_found', 'Conversation not found', 404);
 
     let query = ctx.supabase
@@ -43,11 +44,14 @@ export async function GET(
       .limit(limit + 1);
 
     const kf = keysetFilter(cursor);
+
     if (kf) query = query.or(kf);
 
     const { data, error } = await query;
+
     if (error) {
       console.error('[api/v1/messages] list error:', error);
+
       return fail('internal', 'Failed to list messages', 500);
     }
 
@@ -55,6 +59,7 @@ export async function GET(
       (data ?? []) as Array<{ created_at: string; id: string }>,
       limit
     );
+
     return okList(
       items.map((m) => serializeMessage(m as unknown as Message)),
       nextCursor

@@ -24,6 +24,7 @@ export async function GET(
   try {
     const ctx = await requireApiKey(request, 'webhooks:manage');
     const { id } = await params;
+
     if (!isUuid(id)) return fail('not_found', 'Webhook not found', 404);
 
     const { data, error } = await ctx.supabase
@@ -35,8 +36,10 @@ export async function GET(
 
     if (error) {
       console.error('[api/v1/webhooks] read error:', error);
+
       return fail('internal', 'Failed to read webhook', 500);
     }
+
     if (!data) return fail('not_found', 'Webhook not found', 404);
 
     return ok(serializeWebhookEndpoint(data as Record<string, unknown>));
@@ -52,12 +55,14 @@ export async function PATCH(
   try {
     const ctx = await requireApiKey(request, 'webhooks:manage');
     const { id } = await params;
+
     if (!isUuid(id)) return fail('not_found', 'Webhook not found', 404);
 
     const body = (await request.json().catch(() => null)) as Record<
       string,
       unknown
     > | null;
+
     if (!body || typeof body !== 'object') {
       return fail('bad_request', 'Request body must be a JSON object', 400);
     }
@@ -66,14 +71,17 @@ export async function PATCH(
 
     if ('url' in body) {
       const urlCheck = checkWebhookUrl(body.url);
+
       if (!urlCheck.ok) {
         return fail('bad_request', urlCheck.message, 400);
       }
+
       updates.url = urlCheck.url;
     }
 
     if ('events' in body) {
       const events = normalizeEvents(body.events);
+
       if (!events) {
         return fail(
           'bad_request',
@@ -81,6 +89,7 @@ export async function PATCH(
           400
         );
       }
+
       updates.events = events;
     }
 
@@ -88,7 +97,9 @@ export async function PATCH(
       if (typeof body.is_active !== 'boolean') {
         return fail('bad_request', "'is_active' must be a boolean", 400);
       }
+
       updates.is_active = body.is_active;
+
       // Re-enabling a disabled endpoint clears its failure streak so it
       // isn't instantly re-disabled by a single stale failure.
       if (body.is_active === true) updates.failure_count = 0;
@@ -110,8 +121,10 @@ export async function PATCH(
 
     if (error) {
       console.error('[api/v1/webhooks] update error:', error);
+
       return fail('internal', 'Failed to update webhook', 500);
     }
+
     if (!data) return fail('not_found', 'Webhook not found', 404);
 
     return ok(serializeWebhookEndpoint(data as Record<string, unknown>));
@@ -127,6 +140,7 @@ export async function DELETE(
   try {
     const ctx = await requireApiKey(request, 'webhooks:manage');
     const { id } = await params;
+
     if (!isUuid(id)) return fail('not_found', 'Webhook not found', 404);
 
     const { data, error } = await ctx.supabase
@@ -139,8 +153,10 @@ export async function DELETE(
 
     if (error) {
       console.error('[api/v1/webhooks] delete error:', error);
+
       return fail('internal', 'Failed to delete webhook', 500);
     }
+
     if (!data) return fail('not_found', 'Webhook not found', 404);
 
     return ok({ id: data.id, deleted: true });

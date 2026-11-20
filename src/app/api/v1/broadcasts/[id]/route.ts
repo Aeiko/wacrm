@@ -19,6 +19,7 @@ export async function GET(
   try {
     const ctx = await requireApiKey(request, 'broadcasts:send');
     const { id } = await params;
+
     if (!isUuid(id)) return fail('not_found', 'Broadcast not found', 404);
 
     const { data, error } = await ctx.supabase
@@ -32,8 +33,10 @@ export async function GET(
 
     if (error) {
       console.error('[api/v1/broadcasts] read error:', error);
+
       return fail('internal', 'Failed to read broadcast', 500);
     }
+
     if (!data) return fail('not_found', 'Broadcast not found', 404);
 
     return ok(data);

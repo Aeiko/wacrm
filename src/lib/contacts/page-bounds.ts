@@ -9,6 +9,7 @@ export function pageAfterShrink(
   countIsExact = true
 ): number {
   if (!countIsExact) return Math.max(0, page - 1);
+
   return Math.min(page, lastPageIndex(totalCount, pageSize));
 }
 
@@ -26,6 +27,11 @@ export function pageAfterRangeError(
 ): number | null {
   if (error.code !== RANGE_NOT_SATISFIABLE) return null;
   const total = error.details?.match(/only (\d+) rows?/)?.[1];
+
   if (total === undefined) return Math.max(0, page - 1);
-  return Math.min(Math.max(0, page - 1), lastPageIndex(Number(total), pageSize));
+
+  return Math.min(
+    Math.max(0, page - 1),
+    lastPageIndex(Number(total), pageSize)
+  );
 }

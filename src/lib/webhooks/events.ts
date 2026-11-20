@@ -40,9 +40,12 @@ export function isWebhookEvent(value: unknown): value is WebhookEvent {
 export function normalizeEvents(input: unknown): WebhookEvent[] | null {
   if (!Array.isArray(input) || input.length === 0) return null;
   const out: WebhookEvent[] = [];
+
   for (const entry of input) {
     if (!isWebhookEvent(entry)) return null;
+
     if (!out.includes(entry)) out.push(entry);
   }
+
   return out;
 }

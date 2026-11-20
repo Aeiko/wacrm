@@ -1,6 +1,6 @@
-"use client";
+'use client';
 
-import { useBrowserNotifications } from "@/hooks/use-browser-notifications";
+import { useBrowserNotifications } from '@/hooks/use-browser-notifications';
 
 /**
  * Headless. Mount ONCE per signed-in dashboard tab (the dashboard
@@ -9,5 +9,6 @@ import { useBrowserNotifications } from "@/hooks/use-browser-notifications";
  */
 export function BrowserNotificationsListener() {
   useBrowserNotifications();
+
   return null;
 }

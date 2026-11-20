@@ -9,11 +9,13 @@ function fakeSupabase() {
   const builder: Record<string, unknown> = {
     select: () => {
       mocks.queried = true;
+
       return builder;
     },
     eq: () => builder,
     or: (filter: string) => {
       mocks.orFilters.push(filter);
+
       return builder;
     },
     order: () => builder,
@@ -21,6 +23,7 @@ function fakeSupabase() {
     then: (resolve: (v: { data: unknown[]; error: null }) => void) =>
       resolve({ data: [], error: null }),
   };
+
   return { from: () => builder };
 }
 
@@ -43,6 +46,7 @@ describe('GET /api/v1/contacts', () => {
     const res = await GET(
       new Request('https://x.test/api/v1/contacts?tag=vip')
     );
+
     expect(res.status).toBe(400);
     const body = await res.json();
     expect(body.error.code).toBe('bad_request');
@@ -55,6 +59,7 @@ describe('GET /api/v1/contacts', () => {
         `https://x.test/api/v1/contacts?search=${encodeURIComponent('+14155551234')}`
       )
     );
+
     expect(res.status).toBe(200);
     expect(mocks.orFilters).toContain(
       'name.ilike.*+14155551234*,phone.ilike.*14155551234*'

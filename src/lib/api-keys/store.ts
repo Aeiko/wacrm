@@ -49,11 +49,13 @@ export async function findActiveKeyByHash(
       503
     );
   }
+
   if (!data) return null;
 
   // Liveness checks in JS rather than SQL so the failure modes are
   // explicit and the index stays a simple equality lookup.
   if (data.revoked_at) return null;
+
   if (data.expires_at && new Date(data.expires_at).getTime() <= Date.now()) {
     return null;
   }
@@ -74,7 +76,9 @@ export async function getAccountName(
     .select('name')
     .eq('id', accountId)
     .maybeSingle();
+
   if (error || !data) return null;
+
   return (data.name as string) ?? null;
 }
 

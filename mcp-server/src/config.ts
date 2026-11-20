@@ -20,6 +20,7 @@ export interface Config {
 function truthy(value: string | undefined): boolean {
   if (!value) return false;
   const v = value.trim().toLowerCase();
+
   return v === '1' || v === 'true' || v === 'yes' || v === 'on';
 }
 
@@ -28,8 +29,11 @@ export function loadConfig(): Config {
   const apiKey = process.env.WACRM_API_KEY?.trim();
 
   const missing: string[] = [];
+
   if (!baseUrlRaw) missing.push('WACRM_BASE_URL');
+
   if (!apiKey) missing.push('WACRM_API_KEY');
+
   if (missing.length > 0) {
     throw new Error(
       `Missing required environment variable(s): ${missing.join(', ')}. ` +
@@ -40,6 +44,7 @@ export function loadConfig(): Config {
 
   // Normalise: strip a trailing slash so path joins are predictable.
   const baseUrl = baseUrlRaw!.replace(/\/+$/, '');
+
   if (!/^https?:\/\//.test(baseUrl)) {
     throw new Error(
       `WACRM_BASE_URL must start with http:// or https:// (got "${baseUrl}").`,

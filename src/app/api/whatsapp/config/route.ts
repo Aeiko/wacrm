@@ -1,37 +1,50 @@
-import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
-import { createClient as createAdminClient } from '@supabase/supabase-js'
+import { NextResponse } from 'next/server';
+import { createClient } from '@/lib/supabase/server';
+import { z } from 'zod';
+import {
+  ConnectionGateError,
+  ConnectionOperation,
+  connectionAccountStatus,
+  connectionBody,
+  connectionHeaders,
+  connectionServiceClient,
+  manualConnectionSchema,
+} from '@/lib/whatsapp/connection-operation';
 import {
   ForbiddenError,
   UnauthorizedError,
   requireRole,
-  toErrorResponse,
-} from '@/lib/auth/account'
+  getCurrentAccount,
+} from '@/lib/auth/account';
 import {
   getSubscribedApps,
+  isDefinitiveConnectionRejection,
   listWabaPhoneNumbers,
   registerPhoneNumber,
   subscribeWabaToApp,
   verifyPhoneNumber,
-} from '@/lib/whatsapp/meta-api'
+} from '@/lib/whatsapp/meta-api';
 import {
   explainMetaError,
   metaErrorPayload,
   type MetaConnectStep,
   type MetaErrorContext,
-} from '@/lib/whatsapp/meta-error-explain'
+} from '@/lib/whatsapp/meta-error-explain';
 import {
   appSubscriptionState,
-  describeWabaPhoneMismatch,
-  isNumericMetaId,
   phoneNumberBelongsToWaba,
-} from '@/lib/whatsapp/waba-pairing'
-import { encrypt, decrypt } from '@/lib/whatsapp/encryption'
-import { resolveVerifyTokenForSave } from '@/lib/whatsapp/verify-token'
-import { checkRateLimit, rateLimitResponse, RATE_LIMITS } from '@/lib/rate-limit'
-import { getT } from '@/lib/i18n/translate'
+} from '@/lib/whatsapp/waba-pairing';
+import { encrypt, decrypt } from '@/lib/whatsapp/encryption';
+import { resolveVerifyTokenForSave } from '@/lib/whatsapp/verify-token';
+import {
+  checkRateLimit,
+  rateLimitResponse,
+  RATE_LIMITS,
+} from '@/lib/rate-limit';
+import { getT } from '@/lib/i18n/translate';
+import { withRequestDeadline } from '@/lib/request-deadline';
 
-const t = getT('Api')
+const t = getT('Api');
 
 /**
  * Resolve the caller's account_id from their profile. Inlined here
@@ -45,50 +58,47 @@ const t = getT('Api')
  */
 async function resolveAccountId(
   supabase: Awaited<ReturnType<typeof createClient>>,
-  userId: string,
+  userId: string
 ): Promise<string | null> {
   const { data, error } = await supabase
     .from('profiles')
     .select('account_id')
     .eq('user_id', userId)
-    .maybeSingle()
-  if (error || !data?.account_id) return null
-  return data.account_id as string
+    .maybeSingle();
+
+  if (error || !data?.account_id) return null;
+
+  return data.account_id as string;
 }
 
-// Lazy-initialised service-role client. We need it to detect a
-// phone_number_id already claimed by a *different* user — under RLS,
-// the user's own session can't see other users' rows, so the conflict
-// would be invisible without the service role.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let _adminClient: any = null
-function supabaseAdmin() {
-  if (!_adminClient) {
-    _adminClient = createAdminClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
-    )
-  }
-  return _adminClient
+// Provider text and trace IDs can echo credentials; expose fixed text and numeric diagnostics only.
+function safeConnectionError(
+  err: Error,
+  step: MetaConnectStep,
+  ctx: MetaErrorContext
+) {
+  const explained = explainMetaError(err, step, ctx);
+
+  return {
+    ...explained,
+    code: z.number().int().nullable().catch(null).parse(explained.code),
+    subcode: z.number().int().nullable().catch(null).parse(explained.subcode),
+    summary:
+      step === 'register'
+        ? 'Meta rejected registration. Check the number and PIN.'
+        : 'Meta could not verify these credentials.',
+    metaMessage: 'Meta connection request rejected.',
+    fbtraceId: null,
+  };
 }
 
-/**
- * Shape every failed Meta call into `{ error, meta }` — the actionable
- * text plus the code / subcode / fbtrace_id / step a user can quote to
- * Meta support. Status is 400 when the fix is on the user's side (token,
- * ids, PIN) and 502 when Meta has to change something (issue #505).
- */
-function metaFailure(err: unknown, step: MetaConnectStep, ctx: MetaErrorContext) {
-  const explained = explainMetaError(err, step, ctx)
-  console.error(`[whatsapp/config] Meta ${step} failed:`, explained.metaMessage, {
-    code: explained.code,
-    subcode: explained.subcode,
-    fbtrace_id: explained.fbtraceId,
-  })
+function metaFailure(err: Error, step: MetaConnectStep, ctx: MetaErrorContext) {
+  const explained = safeConnectionError(err, step, ctx);
+
   return NextResponse.json(
     { error: explained.summary, meta: metaErrorPayload(explained) },
-    { status: explained.httpStatus },
-  )
+    { status: explained.httpStatus }
+  );
 }
 
 /**
@@ -106,20 +116,96 @@ function metaFailure(err: unknown, step: MetaConnectStep, ctx: MetaErrorContext)
  *   { connected: false, reason: 'meta_api_error',   message: '...',
  *     meta: { code, subcode, fbtrace_id, step, field, message } }
  */
-export async function GET() {
+async function localMode(request: Request) {
+  const headers = {
+    'Cache-Control': 'private, no-store',
+    'X-Content-Type-Options': 'nosniff',
+  };
+
+  const params = new URL(request.url).searchParams;
+
+  if (params.get('mode') !== 'local' || params.size !== 1)
+    return NextResponse.json(
+      { error: 'invalid_mode' },
+      { status: 400, headers }
+    );
+  const deadline = Date.now() + 15_000;
+  const signal = AbortSignal.any([request.signal, AbortSignal.timeout(15_000)]);
+
   try {
-    const supabase = await createClient()
+    return await withRequestDeadline(
+      deadline,
+      async () => {
+        signal.throwIfAborted();
+
+        const { supabase, accountId, userId } = await getCurrentAccount(
+          await createClient()
+        );
+
+        signal.throwIfAborted();
+
+        const { data: config, error } = await supabase
+          .from('whatsapp_config')
+          .select('coexistence_app_id')
+          .eq('account_id', accountId)
+          .maybeSingle();
+
+        signal.throwIfAborted();
+
+        if (error) throw new Error('Config unavailable');
+
+        return NextResponse.json(
+          {
+            managed: config?.coexistence_app_id != null,
+            operation_state: await connectionAccountStatus(
+              connectionServiceClient(),
+              userId,
+              accountId
+            ),
+          },
+          { headers }
+        );
+      },
+      signal
+    );
+  } catch (error) {
+    const status =
+      signal.aborted || Date.now() >= deadline
+        ? request.signal.aborted
+          ? 499
+          : 504
+        : error instanceof UnauthorizedError || error instanceof ForbiddenError
+          ? error.status
+          : 503;
+
+    return NextResponse.json(
+      { error: 'config_unavailable' },
+      { status, headers }
+    );
+  }
+}
+
+export async function GET(request?: Request) {
+  if (request && new URL(request.url).searchParams.has('mode'))
+    return localMode(request);
+
+  try {
+    const supabase = await createClient();
 
     const {
       data: { user },
       error: authError,
-    } = await supabase.auth.getUser()
+    } = await supabase.auth.getUser();
 
     if (authError || !user) {
-      return NextResponse.json({ error: t('common.unauthorized') }, { status: 401 })
+      return NextResponse.json(
+        { error: t('common.unauthorized') },
+        { status: 401 }
+      );
     }
 
-    const accountId = await resolveAccountId(supabase, user.id)
+    const accountId = await resolveAccountId(supabase, user.id);
+
     if (!accountId) {
       return NextResponse.json(
         {
@@ -127,22 +213,29 @@ export async function GET() {
           reason: 'no_account',
           message: t('common.profileNotLinked'),
         },
-        { status: 200 },
-      )
+        { status: 200 }
+      );
     }
 
     const { data: config, error: configError } = await supabase
       .from('whatsapp_config')
-      .select('phone_number_id, waba_id, access_token, status')
+      .select(
+        'phone_number_id, waba_id, access_token, status, coexistence_app_id'
+      )
       .eq('account_id', accountId)
-      .maybeSingle()
+      .maybeSingle();
 
     if (configError) {
-      console.error('Error fetching whatsapp_config:', configError)
+      console.error('Error fetching whatsapp_config:', configError);
+
       return NextResponse.json(
-        { connected: false, reason: 'db_error', message: t('whatsappConfig.fetchFailed') },
+        {
+          connected: false,
+          reason: 'db_error',
+          message: t('whatsappConfig.fetchFailed'),
+        },
         { status: 200 }
-      )
+      );
     }
 
     if (!config) {
@@ -153,41 +246,57 @@ export async function GET() {
           message: t('whatsappConfig.noConfig'),
         },
         { status: 200 }
-      )
+      );
+    }
+
+    if (config.coexistence_app_id != null) {
+      return NextResponse.json({
+        connected: false,
+        reason: 'coexistence_managed',
+        message:
+          'Use verified Coexistence onboarding to manage this connection.',
+      });
     }
 
     // Try to decrypt the stored token with the current ENCRYPTION_KEY.
     // If this fails, the key changed (or was never consistent across envs).
-    let accessToken: string
+    let accessToken: string;
+
     try {
-      accessToken = decrypt(config.access_token)
+      accessToken = decrypt(config.access_token);
     } catch (err) {
-      console.error('[whatsapp/config GET] Token decryption failed:', err)
+      console.error('[whatsapp/config GET] Token decryption failed:', err);
+
       return NextResponse.json(
         {
           connected: false,
           reason: 'token_corrupted',
           needs_reset: true,
-          message:
-            t('whatsappConfig.tokenCorrupted'),
+          message: t('whatsappConfig.tokenCorrupted'),
         },
         { status: 200 }
-      )
+      );
     }
 
     // Validate credentials against Meta
-    let phoneInfo
+    let phoneInfo;
+
     try {
       phoneInfo = await verifyPhoneNumber({
         phoneNumberId: config.phone_number_id,
         accessToken,
-      })
+      });
     } catch (err) {
       const explained = explainMetaError(err, 'verify_number', {
         phoneNumberId: config.phone_number_id,
         wabaId: config.waba_id,
-      })
-      console.error('[whatsapp/config GET] Meta API verification failed:', explained.metaMessage)
+      });
+
+      console.error(
+        '[whatsapp/config GET] Meta API verification failed:',
+        explained.metaMessage
+      );
+
       return NextResponse.json(
         {
           connected: false,
@@ -196,7 +305,7 @@ export async function GET() {
           meta: metaErrorPayload(explained),
         },
         { status: 200 }
-      )
+      );
     }
 
     // Credentials work. Also report whether the WABA is subscribed to
@@ -205,28 +314,36 @@ export async function GET() {
     // fatal: the token may lack whatsapp_business_management and still
     // be fine for sending.
     let wabaSubscription: {
-      checked: boolean
-      subscribed: boolean | null
-      app_id_match: boolean | null
-      error?: string
-    } = { checked: false, subscribed: null, app_id_match: null }
+      checked: boolean;
+      subscribed: boolean | null;
+      app_id_match: boolean | null;
+      error?: string;
+    } = { checked: false, subscribed: null, app_id_match: null };
+
     if (config.waba_id) {
       try {
-        const subs = await getSubscribedApps({ wabaId: config.waba_id, accessToken })
-        const state = appSubscriptionState(subs, process.env.META_APP_ID)
+        const subs = await getSubscribedApps({
+          wabaId: config.waba_id,
+          accessToken,
+        });
+
+        const state = appSubscriptionState(subs, process.env.META_APP_ID);
         wabaSubscription = {
           checked: true,
           subscribed: state.subscribed,
           app_id_match: state.appIdMatch,
-        }
+        };
       } catch (err) {
-        const explained = explainMetaError(err, 'subscribed_apps', { wabaId: config.waba_id })
+        const explained = explainMetaError(err, 'subscribed_apps', {
+          wabaId: config.waba_id,
+        });
+
         wabaSubscription = {
           checked: true,
           subscribed: null,
           app_id_match: null,
           error: explained.summary,
-        }
+        };
       }
     }
 
@@ -234,381 +351,342 @@ export async function GET() {
       connected: true,
       phone_info: phoneInfo,
       waba_subscription: wabaSubscription,
-    })
+    });
   } catch (error) {
-    console.error('Error in WhatsApp config GET:', error)
+    console.error('Error in WhatsApp config GET:', error);
+
     return NextResponse.json(
-      { connected: false, reason: 'unknown', message: t('common.internalServerError') },
+      {
+        connected: false,
+        reason: 'unknown',
+        message: t('common.internalServerError'),
+      },
       { status: 500 }
-    )
+    );
   }
 }
 
-/**
- * POST /api/whatsapp/config
- *
- * Saves or updates the WhatsApp config for the authenticated user.
- * Verifies credentials with Meta first, then encrypts and stores.
- *
- * Every Meta failure answers `{ error, meta: { code, subcode,
- * fbtrace_id, step, field, message } }` — `error` is the actionable
- * text, `meta` is what to quote to Meta support. 400 = fix it on the
- * form (token / ids / PIN), 502 = Meta has to change something.
- */
-export async function POST(request: Request) {
+/** Manual writes always finish through SQL073; no direct config control writes. */
+async function mutateConfig(request: Request, deleting: boolean) {
+  const overallDeadline = Date.now() + 45_000;
+  const httpDeadline = overallDeadline - 10_000;
+  const signal = AbortSignal.any([request.signal, AbortSignal.timeout(45_000)]);
+  let gate: ConnectionOperation | undefined;
+
   try {
-    const { supabase, accountId, userId } = await requireRole('admin')
-
-    const limit = checkRateLimit(`whatsapp-admin:${userId}`, RATE_LIMITS.whatsappAdmin)
-    if (!limit.success) return rateLimitResponse(limit)
-
-    const body = await request.json()
-    const { phone_number_id, waba_id, access_token, verify_token, pin } = body
-
-    if (!access_token || !phone_number_id) {
-      return NextResponse.json(
-        { error: t('whatsappConfig.credentialsRequired') },
-        { status: 400 }
-      )
-    }
-
-    // Meta ids are decimal digit strings. Catch the classic paste
-    // mistakes (the +phone number, a display name, a URL) here with a
-    // named field, instead of letting Meta answer "(#100) Unsupported
-    // get request" for a value we could have rejected up front.
-    if (!isNumericMetaId(phone_number_id)) {
-      return NextResponse.json(
-        {
-          error:
-            t('whatsappConfig.phoneIdDigits'),
-          field: 'phone_number_id',
-        },
-        { status: 400 }
-      )
-    }
-    if (waba_id !== undefined && waba_id !== null && waba_id !== '' && !isNumericMetaId(waba_id)) {
-      return NextResponse.json(
-        {
-          error:
-            t('whatsappConfig.wabaIdDigits'),
-          field: 'waba_id',
-        },
-        { status: 400 }
-      )
-    }
-    const metaCtx: MetaErrorContext = { phoneNumberId: phone_number_id, wabaId: waba_id || null }
-
-    if (pin !== undefined && pin !== null && pin !== '') {
-      if (typeof pin !== 'string' || !/^\d{6}$/.test(pin)) {
-        return NextResponse.json(
-          { error: t('whatsappConfig.pinDigits') },
-          { status: 400 }
-        )
-      }
-    }
-
-    // Reject if another account has already claimed this phone_number_id.
-    // wacrm is single-tenant-per-WhatsApp-number — letting two accounts
-    // bind the same number causes the webhook's `.single()` lookup to
-    // throw PGRST116 ("multiple rows"), silently dropping every
-    // inbound message. See issue #136. Post-multi-user we key on
-    // account_id (not user_id) since teammates inside the same account
-    // all share one config; the conflict is between accounts.
-    const { data: claimed, error: claimedError } = await supabaseAdmin()
-      .from('whatsapp_config')
-      .select('account_id')
-      .eq('phone_number_id', phone_number_id)
-      .neq('account_id', accountId)
-      .maybeSingle()
-
-    if (claimedError) {
-      console.error('Error checking phone_number_id ownership:', claimedError)
-      return NextResponse.json(
-        { error: t('whatsappConfig.validateFailed') },
-        { status: 500 }
-      )
-    }
-
-    if (claimed) {
-      return NextResponse.json(
-        {
-          error:
-            t('whatsappConfig.numberLinkedElsewhere'),
-        },
-        { status: 409 }
-      )
-    }
-
-    // Verify credentials with Meta BEFORE saving
-    let phoneInfo
-    try {
-      phoneInfo = await verifyPhoneNumber({
-        phoneNumberId: phone_number_id,
-        accessToken: access_token,
-      })
-    } catch (err) {
-      return metaFailure(err, 'verify_number', metaCtx)
-    }
-
-    // The number resolves — now make sure it lives under the WABA the
-    // user typed. A foreign-but-valid WABA ID used to save fine and
-    // subscribe the *wrong* account, surfacing days later as a webhook
-    // that never fires. Failing here names the mismatch instead.
-    if (waba_id) {
-      let wabaNumbers
-      try {
-        wabaNumbers = await listWabaPhoneNumbers({
-          wabaId: waba_id,
-          accessToken: access_token,
-        })
-      } catch (err) {
-        return metaFailure(err, 'waba_phone_numbers', metaCtx)
-      }
-      if (!phoneNumberBelongsToWaba(wabaNumbers, phone_number_id)) {
-        return NextResponse.json(
-          {
-            error: describeWabaPhoneMismatch(wabaNumbers, phone_number_id, waba_id),
-            field: 'waba_id',
-            meta: {
-              code: null,
-              subcode: null,
-              fbtrace_id: null,
-              step: 'waba_phone_numbers',
-              field: 'waba_id',
-              message: 'phone_number_id is not listed under waba_id',
-            },
-          },
-          { status: 400 }
-        )
-      }
-    }
-
-    // Look up any pre-existing row for this account. Two reasons: we need
-    // to know whether this number is already registered with Meta (so we
-    // can skip /register when the user didn't provide a PIN this time
-    // around), and we need the stored verify_token — the settings form
-    // never shows it, so a save that leaves the field blank must keep it
-    // rather than null it out.
-    const { data: existing } = await supabase
-      .from('whatsapp_config')
-      .select('id, registered_at, phone_number_id, verify_token')
-      .eq('account_id', accountId)
-      .maybeSingle()
-
-    // Encrypt sensitive tokens before storing
-    let encryptedAccessToken: string
-    let encryptedVerifyToken: string | null
-    try {
-      encryptedAccessToken = encrypt(access_token)
-      encryptedVerifyToken = resolveVerifyTokenForSave(
-        verify_token,
-        existing?.verify_token ?? null
-      )
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unknown encryption error'
-      console.error('Encryption failed:', message)
-      return NextResponse.json(
-        {
-          error:
-            t('whatsappConfig.encryptFailed'),
-        },
-        { status: 500 }
-      )
-    }
-
-    const sameNumber =
-      existing?.phone_number_id === phone_number_id &&
-      existing?.registered_at != null
-
-    // Step 1: register the phone number for inbound webhooks.
-    //
-    // Attempted on first save AND whenever the user supplies a fresh
-    // PIN (e.g. they rotated the 2FA PIN in Meta Manager). Skipped
-    // when the same number is already registered and no PIN was
-    // supplied — re-registering an already-active number with a
-    // stale PIN would actually fail and undo the active subscription.
-    let registeredAt: string | null = sameNumber ? existing.registered_at : null
-    let registrationError: string | null = null
-    let registrationMeta: ReturnType<typeof metaErrorPayload> | null = null
-    // True when registration was deliberately skipped because no PIN
-    // was supplied (see below). Distinct from registrationError — this
-    // is not a failure, just an incomplete-but-valid save.
-    let registrationSkipped = false
-
-    const needsRegistration = !sameNumber || (typeof pin === 'string' && pin.length > 0)
-    if (needsRegistration) {
-      if (!pin) {
-        // No PIN provided. Meta TEST numbers (Developer Console) are
-        // pre-registered by Meta and expose no two-step verification
-        // PIN to set, so requiring one made them impossible to connect
-        // (issue #242). The /register + PIN step only matters for
-        // production numbers under a shared WABA (issue #136), so treat
-        // it as best-effort: skip it, save the (already Meta-verified)
-        // credentials as connected, and leave registered_at null. The
-        // UI surfaces a separate "Not registered" banner with a path to
-        // add a PIN later for users who do need inbound webhook routing.
-        registrationSkipped = true
-      } else {
+    return await withRequestDeadline(
+      overallDeadline,
+      async () => {
         try {
-          await registerPhoneNumber({
-            phoneNumberId: phone_number_id,
-            accessToken: access_token,
-            pin,
-          })
-          registeredAt = new Date().toISOString()
-        } catch (err) {
-          const explained = explainMetaError(err, 'register', metaCtx)
-          registrationError = explained.summary
-          registrationMeta = metaErrorPayload(explained)
-          console.error('Phone number /register failed:', explained.metaMessage, registrationMeta)
-          // We deliberately fall through and still save the row so the
-          // user can retry without re-entering everything. The UI
-          // surfaces `last_registration_error` so they see WHY it's
-          // not actually live yet.
+          const body = deleting
+            ? (await connectionBody(request, signal, z.strictObject({})), null)
+            : await connectionBody(request, signal, manualConnectionSchema);
+
+          const { supabase, accountId, userId } = await requireRole('admin');
+          signal.throwIfAborted();
+
+          const limit = checkRateLimit(
+            `whatsapp-admin:${userId}`,
+            RATE_LIMITS.whatsappAdmin
+          );
+
+          if (!limit.success) return rateLimitResponse(limit);
+
+          // Revision first fences save/delete ABA even when both config snapshots are absent.
+          const { data: account, error: accountError } = await supabase
+            .from('accounts')
+            .select('connection_revision')
+            .eq('id', accountId)
+            .single();
+
+          if (
+            accountError ||
+            !z.uuid().safeParse(account?.connection_revision).success
+          )
+            throw new ConnectionGateError();
+
+          const { data: existing, error: configError } = await supabase
+            .from('whatsapp_config')
+            .select(
+              'id, coexistence_generation, coexistence_app_id, registered_at, phone_number_id, verify_token'
+            )
+            .eq('account_id', accountId)
+            .maybeSingle();
+
+          if (configError) throw new ConnectionGateError();
+
+          if (existing?.coexistence_app_id != null)
+            return NextResponse.json(
+              {
+                error:
+                  'Use verified Coexistence onboarding to manage this connection.',
+                reason: 'coexistence_managed',
+              },
+              { status: 409 }
+            );
+
+          const db = connectionServiceClient();
+
+          const intent = {
+            p_actor_id: userId,
+            p_account_id: accountId,
+            p_request_id: crypto.randomUUID(),
+            p_expected_revision: account.connection_revision,
+            p_expected_config_id: existing?.id ?? null,
+            p_expected_generation: existing?.coexistence_generation ?? null,
+          };
+
+          if (body === null) {
+            gate = await ConnectionOperation.acquire(db, {
+              ...intent,
+              p_kind: 'manual_delete',
+              p_phone_number_id: null,
+              p_waba_id: null,
+              p_register: false,
+              p_subscribe: false,
+            });
+            await gate.finish(null);
+
+            return NextResponse.json({ success: true });
+          }
+
+          const { phone_number_id, access_token, verify_token, pin } = body;
+          const waba_id = body.waba_id || null;
+
+          const sameNumber =
+            existing?.phone_number_id === phone_number_id &&
+            existing?.registered_at != null;
+
+          const register = Boolean(pin);
+          const registrationSkipped = !sameNumber && !pin;
+
+          let registeredAt: string | null = sameNumber
+            ? existing.registered_at
+            : null;
+
+          let subscribedAt: string | null = null;
+
+          let registrationError: ReturnType<typeof explainMetaError> | null =
+            null;
+
+          let phoneInfo;
+
+          // No claims before proof: a bogus token must not lock somebody else's phone/WABA.
+          await withRequestDeadline(
+            httpDeadline,
+            async () => {
+              try {
+                phoneInfo = await verifyPhoneNumber({
+                  phoneNumberId: phone_number_id,
+                  accessToken: access_token,
+                });
+              } catch (error) {
+                throw metaFailure(
+                  error instanceof Error
+                    ? error
+                    : new Error('Verification failed'),
+                  'verify_number',
+                  { phoneNumberId: phone_number_id, wabaId: waba_id }
+                );
+              }
+
+              if (waba_id) {
+                let numbers;
+
+                try {
+                  numbers = await listWabaPhoneNumbers({
+                    wabaId: waba_id,
+                    accessToken: access_token,
+                  });
+                } catch (error) {
+                  throw metaFailure(
+                    error instanceof Error
+                      ? error
+                      : new Error('Verification failed'),
+                    'waba_phone_numbers',
+                    { phoneNumberId: phone_number_id, wabaId: waba_id }
+                  );
+                }
+
+                if (!phoneNumberBelongsToWaba(numbers, phone_number_id))
+                  throw new ConnectionGateError(400, 'phone_waba_mismatch');
+              }
+            },
+            signal
+          );
+          signal.throwIfAborted();
+          const encryptedAccessToken = encrypt(access_token);
+
+          const encryptedVerifyToken = resolveVerifyTokenForSave(
+            verify_token,
+            existing?.verify_token ?? null
+          );
+
+          gate = await ConnectionOperation.acquire(db, {
+            ...intent,
+            p_kind: 'manual_save',
+            p_phone_number_id: phone_number_id,
+            p_waba_id: waba_id,
+            p_register: register,
+            p_subscribe: Boolean(waba_id),
+          });
+
+          const operation = gate;
+
+          async function step(
+            name: 'register' | 'subscribe',
+            remote: () => Promise<void>
+          ) {
+            signal.throwIfAborted();
+
+            if (Date.now() >= httpDeadline) throw new ConnectionGateError(504);
+            await operation.start(name);
+            let outcome: 'success' | 'rejected' | 'unknown' = 'success';
+            let rejection: ReturnType<typeof safeConnectionError> | null = null;
+
+            try {
+              await withRequestDeadline(httpDeadline, remote, signal);
+            } catch (error) {
+              outcome = isDefinitiveConnectionRejection(error)
+                ? 'rejected'
+                : 'unknown';
+
+              if (outcome === 'rejected' && error instanceof Error)
+                rejection = safeConnectionError(error, 'register', {
+                  phoneNumberId: phone_number_id,
+                  wabaId: waba_id,
+                });
+            }
+
+            // Settlement retains the overall reserve, rather than the spent HTTP deadline.
+            await operation.record(name, outcome);
+
+            if (
+              outcome === 'unknown' ||
+              (name === 'subscribe' && outcome === 'rejected')
+            )
+              throw new ConnectionGateError(409, 'connection_blocked');
+
+            return rejection;
+          }
+
+          if (register) {
+            const rejection = await step('register', async () => {
+              await registerPhoneNumber({
+                phoneNumberId: phone_number_id,
+                accessToken: access_token,
+                pin: pin!,
+              });
+            });
+
+            if (rejection) {
+              registeredAt = null;
+              registrationError = rejection;
+            } else registeredAt = new Date().toISOString();
+          }
+
+          if (waba_id) {
+            await step('subscribe', () =>
+              subscribeWabaToApp({ wabaId: waba_id, accessToken: access_token })
+            );
+            subscribedAt = new Date().toISOString();
+          }
+
+          const receipt = await gate.finish({
+            access_token: encryptedAccessToken,
+            verify_token: encryptedVerifyToken,
+            connected_at: registrationError ? null : new Date().toISOString(),
+            registered_at: registeredAt,
+            subscribed_apps_at: subscribedAt,
+          });
+
+          const registrationFailure = receipt.registration_rejected
+            ? (registrationError ??
+              safeConnectionError(
+                new Error('Registration rejected'),
+                'register',
+                {}
+              ))
+            : null;
+
+          const result = {
+            success: !receipt.registration_rejected,
+            saved: receipt.saved,
+            registered: receipt.registered,
+            phone_info: phoneInfo,
+            registration_skipped: registrationSkipped,
+            registration_error: registrationFailure?.summary ?? null,
+          };
+
+          if (registrationFailure)
+            return NextResponse.json({
+              ...result,
+              error: registrationFailure.summary,
+              meta: metaErrorPayload(registrationFailure),
+            });
+
+          return NextResponse.json(result);
+        } finally {
+          // SQL also checks never-started; failed cleanup must not replace a safe response.
+          if (gate) await gate.cancelUnstarted().catch(() => {});
         }
-      }
-    }
-
-    // Step 2: subscribe the WABA to this app. Idempotent on Meta's
-    // side, so we call on every save and persist the timestamp.
-    // Skipped only when there's no waba_id (legacy rows from before
-    // we required it).
-    //
-    // A failure here used to be swallowed with a console.warn, which
-    // left the user with a green "connected" banner and a webhook that
-    // never fired. Without this subscription Meta delivers nothing, so
-    // treat it as a failed connect and say why (issue #505). Nothing
-    // has been written yet, so the user just fixes the cause and saves
-    // again.
-    let subscribedAppsAt: string | null = null
-    if (waba_id) {
-      try {
-        await subscribeWabaToApp({
-          wabaId: waba_id,
-          accessToken: access_token,
-        })
-        subscribedAppsAt = new Date().toISOString()
-      } catch (err) {
-        return metaFailure(err, 'subscribe_waba', metaCtx)
-      }
-    }
-
-    // Persist everything in one shot. If /register failed we still
-    // store the credentials and the error so the UI can guide the
-    // user through a retry.
-    const baseRow = {
-      phone_number_id,
-      waba_id: waba_id || null,
-      access_token: encryptedAccessToken,
-      verify_token: encryptedVerifyToken,
-      status: registrationError ? 'disconnected' : 'connected',
-      connected_at: registrationError ? null : new Date().toISOString(),
-      registered_at: registrationError ? null : registeredAt,
-      subscribed_apps_at: subscribedAppsAt ?? null,
-      last_registration_error: registrationError,
-      updated_at: new Date().toISOString(),
-    }
-
-    if (existing) {
-      const { error: updateError } = await supabase
-        .from('whatsapp_config')
-        .update(baseRow)
-        .eq('account_id', accountId)
-
-      if (updateError) {
-        console.error('Error updating whatsapp_config:', updateError)
-        return NextResponse.json(
-          { error: t('whatsappConfig.updateFailed') },
-          { status: 500 }
-        )
-      }
-    } else {
-      // Insert with both columns: `account_id` is the tenancy key
-      // (NOT NULL post-017, UNIQUE so duplicates trip the constraint
-      // up-front), `user_id` is the audit column identifying which
-      // member of the account saved the config.
-      const { error: insertError } = await supabase
-        .from('whatsapp_config')
-        .insert({
-          account_id: accountId,
-          user_id: userId,
-          ...baseRow,
-        })
-
-      if (insertError) {
-        console.error('Error inserting whatsapp_config:', insertError)
-        return NextResponse.json(
-          { error: t('whatsappConfig.saveFailed') },
-          { status: 500 }
-        )
-      }
-    }
-
-    if (registrationError) {
-      // Save succeeded but the number isn't actually live. Return
-      // 200 with a structured error so the UI can show the specific
-      // remediation step instead of a generic toast.
-      return NextResponse.json({
-        success: false,
-        saved: true,
-        registered: false,
-        registration_error: registrationError,
-        error: registrationError,
-        meta: registrationMeta,
-        phone_info: phoneInfo,
-      })
-    }
-
-    return NextResponse.json({
-      success: true,
-      saved: true,
-      registered: registeredAt != null,
-      // Credentials are valid and saved, but inbound webhook
-      // registration was skipped because no PIN was supplied (e.g. a
-      // Meta test number). The UI shows the "Not registered" banner
-      // rather than claiming the number is fully live.
-      registration_skipped: registrationSkipped,
-      phone_info: phoneInfo,
-    })
+      },
+      signal
+    );
   } catch (error) {
-    if (error instanceof UnauthorizedError || error instanceof ForbiddenError) {
-      return toErrorResponse(error)
-    }
-    console.error('Error in WhatsApp config POST:', error)
-    return NextResponse.json({ error: t('common.internalServerError') }, { status: 500 })
+    const blocked = gate?.requiresReconciliation === true;
+
+    if (error instanceof Response && !blocked) return error;
+
+    const status =
+      signal.aborted || Date.now() >= overallDeadline
+        ? request.signal.aborted
+          ? 499
+          : 504
+        : error instanceof ConnectionGateError ||
+            error instanceof UnauthorizedError ||
+            error instanceof ForbiddenError
+          ? error.status
+          : 503;
+
+    return NextResponse.json(
+      {
+        error: blocked
+          ? 'connection_blocked'
+          : error instanceof ConnectionGateError
+            ? error.code === 'connection_conflict'
+              ? 'WhatsApp connection changed. Reload before making changes.'
+              : error.code === 'phone_waba_mismatch'
+                ? 'The phone number does not belong to this WhatsApp Business Account.'
+                : error.code
+            : 'The WhatsApp connection is unavailable. Reload before making changes.',
+        ...(blocked ||
+        (error instanceof ConnectionGateError &&
+          error.code === 'connection_blocked')
+          ? { reason: 'connection_operation_blocked' }
+          : error instanceof ConnectionGateError &&
+              error.code === 'connection_busy'
+            ? { reason: 'connection_operation_busy' }
+            : {}),
+      },
+      { status }
+    );
   }
 }
 
-/**
- * DELETE /api/whatsapp/config
- *
- * Removes the authenticated user's WhatsApp configuration row.
- * Used by the "Reset Configuration" button to recover from a corrupted
- * encrypted token (mismatched ENCRYPTION_KEY across environments).
- */
-export async function DELETE() {
-  try {
-    const { supabase, accountId } = await requireRole('admin')
+async function mutationResponse(request: Request, deleting: boolean) {
+  const response = await mutateConfig(request, deleting);
 
-    const { error: deleteError } = await supabase
-      .from('whatsapp_config')
-      .delete()
-      .eq('account_id', accountId)
+  for (const [name, value] of Object.entries(connectionHeaders))
+    response.headers.set(name, value);
 
-    if (deleteError) {
-      console.error('Error deleting whatsapp_config:', deleteError)
-      return NextResponse.json(
-        { error: t('whatsappConfig.deleteFailed') },
-        { status: 500 }
-      )
-    }
+  return response;
+}
 
-    return NextResponse.json({ success: true })
-  } catch (error) {
-    if (error instanceof UnauthorizedError || error instanceof ForbiddenError) {
-      return toErrorResponse(error)
-    }
-    console.error('Error in WhatsApp config DELETE:', error)
-    return NextResponse.json({ error: t('common.internalServerError') }, { status: 500 })
-  }
+export async function POST(request: Request) {
+  return mutationResponse(request, false);
+}
+
+export async function DELETE(request: Request) {
+  return mutationResponse(request, true);
 }

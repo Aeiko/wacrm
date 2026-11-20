@@ -1,5 +1,5 @@
-import type { AccountRole } from "@/lib/auth/roles";
-import type { InteractiveMessagePayload } from "@/lib/whatsapp/interactive";
+import type { AccountRole } from '@/lib/auth/roles';
+import type { InteractiveMessagePayload } from '@/lib/whatsapp/interactive';
 
 export type {
   InteractiveMessagePayload,
@@ -8,7 +8,7 @@ export type {
   InteractiveButton,
   InteractiveListRow,
   InteractiveListSection,
-} from "@/lib/whatsapp/interactive";
+} from '@/lib/whatsapp/interactive';
 
 export interface Profile {
   id: string;
@@ -87,7 +87,7 @@ export interface AccountInvitation {
   id: string;
   account_id: string;
   /** Roles offered via invite — owner is never offered. */
-  role: Exclude<AccountRole, "owner">;
+  role: Exclude<AccountRole, 'owner'>;
   created_by_user_id: string | null;
   label: string | null;
   created_at: string;
@@ -220,6 +220,7 @@ export interface Notification {
 }
 
 export type SenderType = 'customer' | 'agent' | 'bot';
+
 export type ContentType =
   | 'text'
   | 'image'
@@ -230,9 +231,12 @@ export type ContentType =
   | 'template'
   /** Customer tapped a reply button or list row on a message we sent. */
   | 'interactive';
-export type MessageStatus = 'sending' | 'sent' | 'delivered' | 'read' | 'failed';
+
+export type MessageStatus =
+  'sending' | 'sent' | 'delivered' | 'read' | 'failed';
 
 export interface Message {
+  message_source?: 'cloud_api' | 'history' | 'phone_app';
   id: string;
   conversation_id: string;
   sender_type: SenderType;
@@ -413,11 +417,17 @@ export interface Deal {
   assignee?: Profile;
 }
 
-export type BroadcastStatus = 'draft' | 'scheduled' | 'sending' | 'sent' | 'failed';
-export type RecipientStatus = 'pending' | 'sent' | 'delivered' | 'read' | 'replied' | 'failed';
+export type BroadcastStatus =
+  'draft' | 'scheduled' | 'sending' | 'sent' | 'failed';
+
+export type RecipientStatus =
+  'pending' | 'sent' | 'delivered' | 'read' | 'replied' | 'failed';
 
 export interface Broadcast {
   id: string;
+  /** Immutable connection epoch stamped by the database; NULL means legacy. */
+  send_config_id?: string | null;
+  send_generation?: string | null;
   user_id: string;
   name: string;
   template_name: string;
@@ -561,8 +571,12 @@ export interface SendMessageStepConfig {
 export interface InteractiveStepOptions {
   wait_for_reply?: boolean;
 }
-export type SendButtonsStepConfig = InteractiveMessagePayload & InteractiveStepOptions;
-export type SendListStepConfig = InteractiveMessagePayload & InteractiveStepOptions;
+
+export type SendButtonsStepConfig = InteractiveMessagePayload &
+  InteractiveStepOptions;
+
+export type SendListStepConfig = InteractiveMessagePayload &
+  InteractiveStepOptions;
 
 export interface SendTemplateStepConfig {
   template_name: string;
@@ -605,10 +619,7 @@ export interface WaitStepConfig {
 }
 
 export type ConditionSubject =
-  | 'contact_field'
-  | 'tag_presence'
-  | 'message_content'
-  | 'time_of_day';
+  'contact_field' | 'tag_presence' | 'message_content' | 'time_of_day';
 
 export interface ConditionStepConfig {
   subject: ConditionSubject;

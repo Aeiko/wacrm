@@ -53,6 +53,7 @@ export interface TemplatePayload {
 
 export function validateTemplateName(name: string): void {
   if (!name) throw new Error(t('nameRequired'));
+
   if (!TEMPLATE_LIMITS.nameRegex.test(name)) {
     throw new Error(t('nameInvalid'));
   }
@@ -65,10 +66,13 @@ export function validateTemplateName(name: string): void {
 export function extractVariableIndices(text: string): number[] {
   const matches = text.matchAll(/\{\{(\d+)\}\}/g);
   const set = new Set<number>();
+
   for (const m of matches) {
     const n = Number(m[1]);
+
     if (Number.isFinite(n) && n >= 1) set.add(n);
   }
+
   return [...set].sort((a, b) => a - b);
 }
 
@@ -86,12 +90,17 @@ export function extractVariableIndices(text: string): number[] {
  */
 export function extractTemplateVariables(text: string): string[] {
   const keys = new Set<string>();
+
   for (const m of text.matchAll(/\{\{([A-Za-z0-9_]+)\}\}/g)) keys.add(m[1]);
   const all = [...keys];
+
   if (all.length > 0 && all.every((k) => /^\d+$/.test(k))) {
     return extractVariableIndices(text).map(String);
   }
-  return all.filter((k) => isNamedVariable(k)).sort((a, b) => a.localeCompare(b));
+
+  return all
+    .filter((k) => isNamedVariable(k))
+    .sort((a, b) => a.localeCompare(b));
 }
 
 /** True for a NAMED template variable key (`customer_name`, not `1`). */
@@ -110,7 +119,7 @@ function assertBodyContiguous(indices: number[]): void {
         t('bodyNotContiguous', {
           first: '{{1}}',
           found: indices.map((n) => `{{${n}}}`).join(', '),
-        }),
+        })
       );
     }
   }
@@ -118,23 +127,34 @@ function assertBodyContiguous(indices: number[]): void {
 
 export function validateBody(bodyText: string): number[] {
   if (!bodyText.trim()) throw new Error(t('bodyRequired'));
+
   if (bodyText.length > TEMPLATE_LIMITS.bodyMaxLength) {
     throw new Error(
-      t('bodyTooLong', { max: TEMPLATE_LIMITS.bodyMaxLength, got: bodyText.length }),
+      t('bodyTooLong', {
+        max: TEMPLATE_LIMITS.bodyMaxLength,
+        got: bodyText.length,
+      })
     );
   }
+
   const indices = extractVariableIndices(bodyText);
   assertBodyContiguous(indices);
+
   return indices;
 }
 
 export function validateFooter(footerText: string | undefined): void {
   if (!footerText) return;
+
   if (footerText.length > TEMPLATE_LIMITS.footerMaxLength) {
     throw new Error(
-      t('footerTooLong', { max: TEMPLATE_LIMITS.footerMaxLength, got: footerText.length }),
+      t('footerTooLong', {
+        max: TEMPLATE_LIMITS.footerMaxLength,
+        got: footerText.length,
+      })
     );
   }
+
   if (extractVariableIndices(footerText).length > 0) {
     throw new Error(t('footerNoVariables', { placeholder: '{{N}}' }));
   }
@@ -149,45 +169,50 @@ export function validateHeader(
   payload: Pick<
     TemplatePayload,
     'header_type' | 'header_content' | 'header_media_url' | 'header_handle'
-  >,
+  >
 ): HeaderValidationResult {
-  const { header_type, header_content, header_media_url, header_handle } = payload;
+  const { header_type, header_content, header_media_url, header_handle } =
+    payload;
+
   if (!header_type) return { variableCount: 0 };
 
   if (header_type === 'text') {
     if (!header_content || !header_content.trim()) {
       throw new Error(t('headerTextRequired'));
     }
+
     if (header_content.length > TEMPLATE_LIMITS.headerTextMaxLength) {
       throw new Error(
         t('headerTextTooLong', {
           max: TEMPLATE_LIMITS.headerTextMaxLength,
           got: header_content.length,
-        }),
+        })
       );
     }
+
     const indices = extractVariableIndices(header_content);
+
     if (indices.length > 1) {
-      throw new Error(
-        t('headerTooManyVariables', { count: indices.length }),
-      );
+      throw new Error(t('headerTooManyVariables', { count: indices.length }));
     }
+
     if (indices.length === 1 && indices[0] !== 1) {
       throw new Error(t('headerVariableMustBeFirst', { var: '{{1}}' }));
     }
+
     return { variableCount: indices.length };
   }
 
   // image / video / document need either a public URL or a Resumable
   // Upload handle. Either one — Meta accepts both example forms.
   if (!header_media_url && !header_handle) {
-    throw new Error(
-      t('mediaHeaderRequiresSource', { type: header_type }),
-    );
+    throw new Error(t('mediaHeaderRequiresSource', { type: header_type }));
   }
+
   if (header_media_url) {
     try {
       const u = new URL(header_media_url);
+
       if (u.protocol !== 'https:' && u.protocol !== 'http:') {
         throw new Error(t('headerMediaUrlScheme'));
       }
@@ -195,11 +220,12 @@ export function validateHeader(
       throw new Error(t('headerMediaUrlInvalid'));
     }
   }
+
   return { variableCount: 0 };
 }
 
 function countButtonsByType(
-  buttons: TemplateButton[],
+  buttons: TemplateButton[]
 ): Record<TemplateButton['type'], number> {
   const counts: Record<TemplateButton['type'], number> = {
     QUICK_REPLY: 0,
@@ -207,38 +233,50 @@ function countButtonsByType(
     PHONE_NUMBER: 0,
     COPY_CODE: 0,
   };
+
   for (const b of buttons) counts[b.type]++;
+
   return counts;
 }
 
 export function validateButtons(buttons: TemplateButton[] | undefined): void {
   if (!buttons || buttons.length === 0) return;
+
   if (buttons.length > TEMPLATE_LIMITS.maxButtonsTotal) {
     throw new Error(
-      t('tooManyButtons', { max: TEMPLATE_LIMITS.maxButtonsTotal, got: buttons.length }),
+      t('tooManyButtons', {
+        max: TEMPLATE_LIMITS.maxButtonsTotal,
+        got: buttons.length,
+      })
     );
   }
 
   const counts = countButtonsByType(buttons);
+
   if (counts.URL > TEMPLATE_LIMITS.maxUrlButtons) {
     throw new Error(
-      t('tooManyUrlButtons', { max: TEMPLATE_LIMITS.maxUrlButtons, got: counts.URL }),
+      t('tooManyUrlButtons', {
+        max: TEMPLATE_LIMITS.maxUrlButtons,
+        got: counts.URL,
+      })
     );
   }
+
   if (counts.PHONE_NUMBER > TEMPLATE_LIMITS.maxPhoneButtons) {
     throw new Error(
       t('tooManyPhoneButtons', {
         max: TEMPLATE_LIMITS.maxPhoneButtons,
         got: counts.PHONE_NUMBER,
-      }),
+      })
     );
   }
+
   if (counts.COPY_CODE > TEMPLATE_LIMITS.maxCopyCodeButtons) {
     throw new Error(
       t('tooManyCopyCodeButtons', {
         max: TEMPLATE_LIMITS.maxCopyCodeButtons,
         got: counts.COPY_CODE,
-      }),
+      })
     );
   }
 
@@ -246,12 +284,11 @@ export function validateButtons(buttons: TemplateButton[] | undefined): void {
   // interleaved with CTA buttons. Easiest check: walk the array; once
   // we leave the QUICK_REPLY block, we must not see another.
   let sawNonQR = false;
+
   for (const b of buttons) {
     if (b.type === 'QUICK_REPLY') {
       if (sawNonQR) {
-        throw new Error(
-          t('quickReplyInterleaved'),
-        );
+        throw new Error(t('quickReplyInterleaved'));
       }
     } else {
       sawNonQR = true;
@@ -260,57 +297,66 @@ export function validateButtons(buttons: TemplateButton[] | undefined): void {
 
   for (let i = 0; i < buttons.length; i++) {
     const b = buttons[i];
+
     if (!b.text?.trim()) {
       throw new Error(t('buttonMissingText', { n: i + 1, type: b.type }));
     }
+
     if (b.text.length > TEMPLATE_LIMITS.buttonTextMaxLength) {
       throw new Error(
-        t('buttonTextTooLong', { n: i + 1, max: TEMPLATE_LIMITS.buttonTextMaxLength }),
+        t('buttonTextTooLong', {
+          n: i + 1,
+          max: TEMPLATE_LIMITS.buttonTextMaxLength,
+        })
       );
     }
+
     switch (b.type) {
       case 'URL': {
         if (!b.url?.trim()) {
           throw new Error(t('urlButtonMissingUrl', { n: i + 1 }));
         }
+
         try {
           new URL(b.url);
         } catch {
           throw new Error(t('urlButtonInvalidUrl', { n: i + 1 }));
         }
+
         const urlVars = extractVariableIndices(b.url);
+
         if (urlVars.length > 1) {
-          throw new Error(
-            t('urlButtonTooManyVariables', { n: i + 1 }),
-          );
+          throw new Error(t('urlButtonTooManyVariables', { n: i + 1 }));
         }
+
         if (urlVars.length === 1) {
           if (urlVars[0] !== 1) {
             throw new Error(
-              t('urlButtonVariableMustBeFirst', { n: i + 1, var: '{{1}}' }),
+              t('urlButtonVariableMustBeFirst', { n: i + 1, var: '{{1}}' })
             );
           }
+
           if (!b.example?.trim()) {
             throw new Error(
-              t('urlButtonNeedsExample', { n: i + 1, var: '{{1}}' }),
+              t('urlButtonNeedsExample', { n: i + 1, var: '{{1}}' })
             );
           }
         }
+
         break;
       }
+
       case 'PHONE_NUMBER':
         if (!b.phone_number?.trim()) {
-          throw new Error(
-            t('phoneButtonMissingNumber', { n: i + 1 }),
-          );
+          throw new Error(t('phoneButtonMissingNumber', { n: i + 1 }));
         }
+
         break;
       case 'COPY_CODE':
         if (!b.example?.trim()) {
-          throw new Error(
-            t('copyCodeButtonMissingExample', { n: i + 1 }),
-          );
+          throw new Error(t('copyCodeButtonMissingExample', { n: i + 1 }));
         }
+
         break;
     }
   }
@@ -323,7 +369,7 @@ export function validateButtons(buttons: TemplateButton[] | undefined): void {
 export function validateSampleValues(
   payload: TemplatePayload,
   bodyVarCount: number,
-  headerVarCount: number,
+  headerVarCount: number
 ): void {
   const samples = payload.sample_values ?? {};
   const body = samples.body ?? [];
@@ -331,19 +377,25 @@ export function validateSampleValues(
 
   if (body.length !== bodyVarCount) {
     throw new Error(
-      t('bodySampleCountMismatch', { count: bodyVarCount, got: body.length }),
+      t('bodySampleCountMismatch', { count: bodyVarCount, got: body.length })
     );
   }
+
   if (header.length !== headerVarCount) {
     throw new Error(
-      t('headerSampleCountMismatch', { count: headerVarCount, got: header.length }),
+      t('headerSampleCountMismatch', {
+        count: headerVarCount,
+        got: header.length,
+      })
     );
   }
+
   for (let i = 0; i < body.length; i++) {
     if (!body[i] || !body[i].trim()) {
       throw new Error(t('bodySampleEmpty', { n: i + 1 }));
     }
   }
+
   for (let i = 0; i < header.length; i++) {
     if (!header[i] || !header[i].trim()) {
       throw new Error(t('headerSampleEmpty', { n: i + 1 }));
@@ -361,14 +413,17 @@ export function validateTemplatePayload(payload: TemplatePayload): {
   headerVarCount: number;
 } {
   validateTemplateName(payload.name);
+
   if (!payload.language?.trim()) {
     throw new Error(t('languageRequired'));
   }
+
   const bodyVars = validateBody(payload.body_text);
   validateFooter(payload.footer_text);
   const headerResult = validateHeader(payload);
   validateButtons(payload.buttons);
   validateSampleValues(payload, bodyVars.length, headerResult.variableCount);
+
   return {
     bodyVarCount: bodyVars.length,
     headerVarCount: headerResult.variableCount,

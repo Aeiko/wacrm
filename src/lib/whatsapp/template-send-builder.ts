@@ -84,9 +84,10 @@ type MetaSendParameter =
 
 function buildHeaderComponent(
   template: MessageTemplate,
-  params: SendTimeParams,
+  params: SendTimeParams
 ): MetaSendComponent | null {
   const headerType = template.header_type;
+
   if (!headerType) return null;
 
   if (headerType === 'text') {
@@ -94,13 +95,14 @@ function buildHeaderComponent(
     // (no variables) just ride along inside the template itself; no
     // header component required on send.
     const [key] = extractTemplateVariables(template.header_content ?? '');
+
     if (!key) return null;
     const value = params.headerText;
+
     if (!value || !value.trim()) {
-      throw new Error(
-        t('headerTextValueRequired', { var: `{{${key}}}` }),
-      );
+      throw new Error(t('headerTextValueRequired', { var: `{{${key}}}` }));
     }
+
     return {
       type: 'header',
       parameters: [textParameter(key, value)],
@@ -118,12 +120,13 @@ function buildHeaderComponent(
   // an explicit `headerMediaId` (a real /media upload id) is honored.
   const link = params.headerMediaUrl ?? template.header_media_url;
   const id = params.headerMediaId;
+
   if (!link && !id) {
-    throw new Error(
-      t('mediaHeaderSendSource', { type: headerType }),
-    );
+    throw new Error(t('mediaHeaderSendSource', { type: headerType }));
   }
+
   const mediaPayload: { link?: string; id?: string } = id ? { id } : { link };
+
   return {
     type: 'header',
     parameters: [
@@ -138,20 +141,24 @@ function buildHeaderComponent(
 
 function buildBodyComponent(
   template: MessageTemplate,
-  params: SendTimeParams,
+  params: SendTimeParams
 ): MetaSendComponent | null {
   const keys = extractTemplateVariables(template.body_text);
   const varCount = keys.length;
   const body = params.body ?? [];
+
   if (varCount === 0 && body.length === 0) return null;
+
   if (body.length < varCount) {
     throw new Error(
-      t('bodyValuesMissing', { count: varCount, got: body.length }),
+      t('bodyValuesMissing', { count: varCount, got: body.length })
     );
   }
+
   // Trim to the variable count — extra values are dropped silently so
   // a legacy caller that passes too many doesn't error out.
   const values = body.slice(0, varCount);
+
   return {
     type: 'body',
     parameters: values.map((text, i) => textParameter(keys[i], String(text))),
@@ -167,7 +174,7 @@ function textParameter(key: string, text: string): MetaSendParameter {
 
 function buttonNeedsSendParam(
   button: TemplateButton,
-  override: string | undefined,
+  override: string | undefined
 ): boolean {
   switch (button.type) {
     case 'URL':
@@ -186,7 +193,7 @@ function buttonNeedsSendParam(
 function buildButtonComponent(
   button: TemplateButton,
   index: number,
-  override: string | undefined,
+  override: string | undefined
 ): MetaSendComponent | null {
   if (!buttonNeedsSendParam(button, override)) return null;
 
@@ -196,9 +203,10 @@ function buildButtonComponent(
       // the button's index in the template's buttons array.
       if (!override || !override.trim()) {
         throw new Error(
-          t('urlButtonParamRequired', { n: index + 1, var: '{{1}}', index }),
+          t('urlButtonParamRequired', { n: index + 1, var: '{{1}}', index })
         );
       }
+
       return {
         type: 'button',
         sub_type: 'url',
@@ -206,8 +214,10 @@ function buildButtonComponent(
         parameters: [{ type: 'text', text: override }],
       };
     }
+
     case 'COPY_CODE': {
       const code = override?.trim() || button.example;
+
       return {
         type: 'button',
         sub_type: 'copy_code',
@@ -215,6 +225,7 @@ function buildButtonComponent(
         parameters: [{ type: 'coupon_code', coupon_code: code }],
       };
     }
+
     case 'QUICK_REPLY': {
       // Only included when the caller explicitly overrides the
       // payload (rare — usually QR buttons use their default text).
@@ -225,6 +236,7 @@ function buildButtonComponent(
         parameters: [{ type: 'payload', payload: override! }],
       };
     }
+
     case 'PHONE_NUMBER':
       // PHONE_NUMBER buttons never accept send-time params per Meta —
       // return null even if an override snuck through.
@@ -239,19 +251,24 @@ function buildButtonComponent(
  */
 export function buildSendComponents(
   template: MessageTemplate,
-  params: SendTimeParams = {},
+  params: SendTimeParams = {}
 ): MetaSendComponent[] {
   const out: MetaSendComponent[] = [];
   const header = buildHeaderComponent(template, params);
+
   if (header) out.push(header);
   const body = buildBodyComponent(template, params);
+
   if (body) out.push(body);
+
   if (template.buttons?.length) {
     template.buttons.forEach((btn, i) => {
       const override = params.buttonParams?.[i];
       const component = buildButtonComponent(btn, i, override);
+
       if (component) out.push(component);
     });
   }
+
   return out;
 }

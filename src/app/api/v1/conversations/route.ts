@@ -28,8 +28,13 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const status = url.searchParams.get('status');
     const contactId = url.searchParams.get('contact_id');
+
     if (contactId && !isUuid(contactId)) {
-      return fail('bad_request', "'contact_id' must be a contact id (UUID)", 400);
+      return fail(
+        'bad_request',
+        "'contact_id' must be a contact id (UUID)",
+        400
+      );
     }
 
     let query = ctx.supabase
@@ -38,6 +43,7 @@ export async function GET(request: Request) {
       .eq('account_id', ctx.accountId);
 
     if (status) query = query.eq('status', status);
+
     if (contactId) query = query.eq('contact_id', contactId);
 
     query = query
@@ -46,11 +52,14 @@ export async function GET(request: Request) {
       .limit(limit + 1);
 
     const kf = keysetFilter(cursor);
+
     if (kf) query = query.or(kf);
 
     const { data, error } = await query;
+
     if (error) {
       console.error('[api/v1/conversations] list error:', error);
+
       return fail('internal', 'Failed to list conversations', 500);
     }
 
@@ -58,6 +67,7 @@ export async function GET(request: Request) {
       (data ?? []) as Array<{ created_at: string; id: string }>,
       limit
     );
+
     return okList(
       items.map((r) =>
         serializeConversation(normalizeConversation(r as Conversation))

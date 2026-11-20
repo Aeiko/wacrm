@@ -18,10 +18,17 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import { BroadcastError, type BroadcastPlan } from '@/lib/whatsapp/broadcast-core';
+import {
+  BroadcastError,
+  type BroadcastPlan,
+} from '@/lib/whatsapp/broadcast-core';
 import { DELIVERY_LOCK_STALE_MS } from '@/lib/whatsapp/broadcast-delivery-lease';
 import { chunk } from '@/lib/supabase/paged-query';
 import { decrypt } from '@/lib/whatsapp/encryption';
+import {
+  assertOutboundSendAllowed,
+  withStoredSendConnection,
+} from '@/lib/whatsapp/coexistence/send-guard';
 import { resolveTemplateRow } from '@/lib/whatsapp/template-body';
 import { sanitizePhoneForMeta, isValidE164 } from '@/lib/whatsapp/phone-utils';
 
@@ -48,7 +55,9 @@ export const RESUME_MAX_SCAN_PAGES = 25;
 
 function scopeStatuses(scope: ResumeScope): string[] {
   if (scope === 'pending') return ['pending'];
+
   if (scope === 'failed') return ['failed'];
+
   return ['pending', 'failed'];
 }
 
@@ -72,7 +81,10 @@ export async function claimBroadcastDelivery(
 
   const { data, error } = await db
     .from('broadcasts')
-    .update({ delivery_locked_at: now.toISOString(), delivery_lease_until: null })
+    .update({
+      delivery_locked_at: now.toISOString(),
+      delivery_lease_until: null,
+    })
     .eq('id', broadcastId)
     .eq('account_id', accountId)
     .or(
@@ -82,8 +94,10 @@ export async function claimBroadcastDelivery(
 
   if (error) {
     console.error('[broadcast-resume] claim failed:', error.message);
+
     return false;
   }
+
   return Array.isArray(data) && data.length > 0;
 }
 
@@ -96,6 +110,7 @@ export async function releaseBroadcastDelivery(
     .from('broadcasts')
     .update({ delivery_locked_at: null })
     .eq('id', broadcastId);
+
   if (error) {
     console.error('[broadcast-resume] release failed:', error.message);
   }
@@ -122,6 +137,7 @@ interface RecipientRow {
 /** Supabase renders an embedded to-one join as an object or a 1-array. */
 function contactPhone(row: RecipientRow): string | null {
   const c = Array.isArray(row.contact) ? row.contact[0] : row.contact;
+
   return c?.phone ?? null;
 }
 
@@ -144,7 +160,9 @@ export async function planBroadcastResume(
 ): Promise<ResumePlan> {
   const { data: broadcast, error: bcError } = await db
     .from('broadcasts')
-    .select('id, template_name, template_language')
+    .select(
+      'id, template_name, template_language, send_config_id, send_generation'
+    )
     .eq('id', broadcastId)
     .eq('account_id', accountId)
     .maybeSingle();
@@ -152,6 +170,25 @@ export async function planBroadcastResume(
   if (bcError || !broadcast) {
     throw new BroadcastError('not_found', 'Broadcast not found', 404);
   }
+
+  const { data: config, error: configError } = await db
+    .from('whatsapp_config')
+    .select('*')
+    .eq('account_id', accountId)
+    .single();
+
+  if (configError || !config) {
+    throw new BroadcastError(
+      'whatsapp_not_configured',
+      'WhatsApp not configured. Please set up your WhatsApp integration first.',
+      400
+    );
+  }
+
+  const accessToken = decrypt(config.access_token);
+  await withStoredSendConnection(accountId, broadcast, () =>
+    assertOutboundSendAllowed(config.phone_number_id, accessToken)
+  );
 
   const statuses = scopeStatuses(scope);
   const sendable: RecipientRow[] = [];
@@ -165,13 +202,16 @@ export async function planBroadcastResume(
     page++
   ) {
     const from = page * RESUME_MAX_PER_REQUEST;
+
     const {
       data: rawRows,
       count,
       error: recError,
     } = await db
       .from('broadcast_recipients')
-      .select('id, template_params, contact:contacts(phone)', { count: 'exact' })
+      .select('id, template_params, contact:contacts(phone)', {
+        count: 'exact',
+      })
       .eq('broadcast_id', broadcastId)
       .in('status', statuses)
       // Oldest first, so repeated capped passes chew through the backlog
@@ -181,11 +221,15 @@ export async function planBroadcastResume(
       .range(from, from + RESUME_MAX_PER_REQUEST - 1);
 
     if (recError) {
-      console.error('[broadcast-resume] recipient load failed:', recError.message);
+      console.error(
+        '[broadcast-resume] recipient load failed:',
+        recError.message
+      );
       throw new BroadcastError('internal', 'Failed to load recipients', 500);
     }
 
     const rows = (rawRows ?? []) as RecipientRow[];
+
     if (page === 0) inScopeCount = count ?? null;
     scanned += rows.length;
 
@@ -194,6 +238,7 @@ export async function planBroadcastResume(
     // 'sending' forever, which is the very symptom being fixed.
     for (const row of rows) {
       const sanitized = sanitizePhoneForMeta(contactPhone(row) ?? '');
+
       if (isValidE164(sanitized)) sendable.push(row);
       else unsendable.push(row.id);
     }
@@ -225,25 +270,13 @@ export async function planBroadcastResume(
     );
   }
 
-  const { data: config, error: configError } = await db
-    .from('whatsapp_config')
-    .select('*')
-    .eq('account_id', accountId)
-    .single();
-  if (configError || !config) {
-    throw new BroadcastError(
-      'whatsapp_not_configured',
-      'WhatsApp not configured. Please set up your WhatsApp integration first.',
-      400
-    );
-  }
-
   const resolvedTemplate = await resolveTemplateRow(
     db,
     accountId,
     broadcast.template_name,
     broadcast.template_language
   );
+
   if (resolvedTemplate.malformed) {
     throw new BroadcastError(
       'template_malformed',
@@ -254,10 +287,13 @@ export async function planBroadcastResume(
 
   const plan: BroadcastPlan = {
     broadcastId,
+    accountId,
+    send_config_id: broadcast.send_config_id ?? null,
+    send_generation: broadcast.send_generation ?? null,
     templateName: broadcast.template_name,
     templateLanguage: resolvedTemplate.language,
     phoneNumberId: config.phone_number_id,
-    accessToken: decrypt(config.access_token),
+    accessToken,
     templateRow: resolvedTemplate.row,
     planned: slice.map((row) => ({
       recipientRowId: row.id,

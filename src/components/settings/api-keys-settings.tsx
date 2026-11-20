@@ -40,7 +40,7 @@ import {
   SCOPE_DESCRIPTIONS,
   type ApiScope,
 } from '@/lib/api-keys/scopes';
-import { useTranslations } from 'next-intl';
+import { useTranslations } from 'use-intl';
 import { SettingsPanelHead } from './settings-panel-head';
 
 interface ApiKey {
@@ -64,12 +64,22 @@ function fmtDate(iso: string): string {
 
 function keyStatus(k: ApiKey): 'active' | 'revoked' | 'expired' {
   if (k.revoked_at) return 'revoked';
+
   if (k.expires_at && new Date(k.expires_at).getTime() <= Date.now())
     return 'expired';
+
   return 'active';
 }
 
 export function ApiKeysSettings() {
+  const { accountId, user } = useAuth();
+
+  if (!accountId) return null;
+
+  return <ApiKeysSettingsPanel key={`${user?.id}:${accountId}`} />;
+}
+
+function ApiKeysSettingsPanel() {
   const { canEditSettings } = useAuth();
   const t = useTranslations('Settings.apiKeys');
 
@@ -78,23 +88,25 @@ export function ApiKeysSettings() {
   const [createOpen, setCreateOpen] = useState(false);
   const [revoking, setRevoking] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    try {
-      const res = await fetch('/api/account/api-keys', { cache: 'no-store' });
-      if (!res.ok) {
-        const payload = await res.json().catch(() => ({}));
-        toast.error(payload.error || t('loadFailed'));
-        return;
-      }
-      const data = (await res.json()) as { keys: ApiKey[] };
-      setKeys(data.keys);
-    } catch (err) {
-      console.error('[ApiKeysSettings] load error:', err);
-      toast.error(t('networkError'));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const load = useCallback(() => {
+    return fetch('/api/account/api-keys', { cache: 'no-store' })
+      .then(async (res) => {
+        if (!res.ok) {
+          const payload = await res.json().catch(() => ({}));
+          toast.error(payload.error || t('loadFailed'));
+
+          return;
+        }
+
+        const data = (await res.json()) as { keys: ApiKey[] };
+        setKeys(data.keys);
+      })
+      .catch((err) => {
+        console.error('[ApiKeysSettings] load error:', err);
+        toast.error(t('networkError'));
+      })
+      .finally(() => setLoading(false));
+  }, [t]);
 
   useEffect(() => {
     void load();
@@ -102,15 +114,19 @@ export function ApiKeysSettings() {
 
   async function handleRevoke(key: ApiKey) {
     setRevoking(key.id);
+
     try {
       const res = await fetch(`/api/account/api-keys/${key.id}`, {
         method: 'DELETE',
       });
+
       if (!res.ok) {
         const payload = await res.json().catch(() => ({}));
         toast.error(payload.error || t('revokeFailed'));
+
         return;
       }
+
       toast.success(t('revokeSuccess', { name: key.name }));
       // Reflect the revoke locally without a refetch.
       setKeys((prev) =>
@@ -138,12 +154,14 @@ export function ApiKeysSettings() {
     <section className="animate-in fade-in-50 space-y-6 duration-200">
       <SettingsPanelHead
         title={t('title')}
-        description={
-          t.rich('description', {
-            apiCode: (chunks: React.ReactNode) => <code className="text-xs">{chunks}</code>,
-            headerCode: (chunks: React.ReactNode) => <code className="text-xs">{chunks}</code>
-          })
-        }
+        description={t.rich('description', {
+          apiCode: (chunks: React.ReactNode) => (
+            <code className="text-xs">{chunks}</code>
+          ),
+          headerCode: (chunks: React.ReactNode) => (
+            <code className="text-xs">{chunks}</code>
+          ),
+        })}
         action={
           <RequireRole min="admin">
             <Button onClick={() => setCreateOpen(true)}>
@@ -183,6 +201,7 @@ export function ApiKeysSettings() {
               {keys.map((k) => {
                 const status = keyStatus(k);
                 const inactive = status !== 'active';
+
                 return (
                   <li
                     key={k.id}
@@ -311,22 +330,30 @@ function CreateKeyDialog({
 
   async function handleCreate() {
     const trimmed = name.trim();
+
     if (!trimmed) {
       toast.error(t('nameRequired'));
+
       return;
     }
+
     setSubmitting(true);
+
     try {
       const res = await fetch('/api/account/api-keys', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: trimmed, scopes }),
       });
+
       const payload = await res.json().catch(() => ({}));
+
       if (!res.ok) {
         toast.error(payload.error || t('createError'));
+
         return;
       }
+
       setCreatedKey(payload.plaintext as string);
       onCreated();
     } catch (err) {
@@ -339,6 +366,7 @@ function CreateKeyDialog({
 
   async function copyKey() {
     if (!createdKey) return;
+
     try {
       await navigator.clipboard.writeText(createdKey);
       toast.success(t('copySuccess'));
@@ -368,7 +396,9 @@ function CreateKeyDialog({
             </DialogHeader>
 
             <div className="space-y-1.5">
-              <Label className="text-muted-foreground">{t('apiKeyLabel')}</Label>
+              <Label className="text-muted-foreground">
+                {t('apiKeyLabel')}
+              </Label>
               <div className="flex gap-2">
                 <Input
                   readOnly
@@ -420,7 +450,9 @@ function CreateKeyDialog({
               </div>
 
               <div className="space-y-2">
-                <Label className="text-muted-foreground">{t('scopesLabel')}</Label>
+                <Label className="text-muted-foreground">
+                  {t('scopesLabel')}
+                </Label>
                 <div className="border-border space-y-2 rounded-md border p-3">
                   {API_SCOPES.map((scope) => (
                     <label

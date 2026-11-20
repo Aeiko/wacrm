@@ -46,16 +46,19 @@ export async function GET(request: Request) {
   const next = safeNextPath(searchParams.get('next'));
 
   const upstreamError = parseSupabaseError(searchParams);
+
   if (upstreamError) {
     return relativeRedirect(loginFailurePath(upstreamError));
   }
 
   const link = parseEmailLink(searchParams);
+
   if (!link) {
     return relativeRedirect(loginFailurePath('link_invalid'));
   }
 
   const supabase = await createClient();
+
   const { error } =
     link.kind === 'code'
       ? await supabase.auth.exchangeCodeForSession(link.code)
@@ -73,6 +76,7 @@ export async function GET(request: Request) {
       kind: link.kind,
       message: error.message,
     });
+
     return relativeRedirect(loginFailurePath('link_invalid'));
   }
 

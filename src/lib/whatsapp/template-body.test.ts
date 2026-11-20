@@ -30,17 +30,20 @@ function row(over: Partial<MessageTemplate>): MessageTemplate {
  */
 function dbReturning(
   rows: unknown[],
-  filters: Record<string, unknown> = {}
+  filters: Record<string, string> = {},
+  error: { message: string } | null = null
 ): SupabaseClient {
   const builder = {
     select: () => builder,
-    eq: (col: string, val: unknown) => {
+    eq: (col: string, val: string) => {
       filters[col] = val;
+
       return builder;
     },
-    then: (resolve: (r: { data: unknown[] }) => unknown) =>
-      resolve({ data: rows }),
+    then: (resolve: (r: { data: unknown[]; error: typeof error }) => void) =>
+      resolve({ data: rows, error }),
   };
+
   return { from: () => builder } as unknown as SupabaseClient;
 }
 
@@ -102,8 +105,17 @@ describe('templateBodyParams', () => {
 });
 
 describe('resolveTemplateRow', () => {
+  it('rejects query errors instead of treating them as a missing template', async () => {
+    const error = { message: 'template lookup unavailable' };
+
+    await expect(
+      resolveTemplateRow(dbReturning([], {}, error), 'acct-1', 'order_update')
+    ).rejects.toEqual(error);
+  });
+
   it('scopes the lookup to the account and template name', async () => {
-    const filters: Record<string, unknown> = {};
+    const filters: Record<string, string> = {};
+
     await resolveTemplateRow(
       dbReturning([row({})], filters),
       'acct-1',
@@ -120,6 +132,7 @@ describe('resolveTemplateRow', () => {
       'order_update',
       'en_US'
     );
+
     expect(resolved.row?.language).toBe('en');
     // Caller pinned a language — that is what Meta is sent.
     expect(resolved.language).toBe('en_US');
@@ -132,6 +145,7 @@ describe('resolveTemplateRow', () => {
       'order_update',
       null
     );
+
     expect(resolved.row?.language).toBe('en');
     // The old code pinned 'en_US' here, which Meta rejects as a
     // missing translation.
@@ -148,6 +162,7 @@ describe('resolveTemplateRow', () => {
       'order_update',
       'en_GB'
     );
+
     expect(resolved.row?.id).toBe('b');
   });
 
@@ -161,6 +176,7 @@ describe('resolveTemplateRow', () => {
       'acct-1',
       'order_update'
     );
+
     expect(resolved.row?.id).toBe('us');
   });
 
@@ -171,6 +187,7 @@ describe('resolveTemplateRow', () => {
       'missing',
       'fr'
     );
+
     expect(resolved).toEqual({ row: null, malformed: false, language: 'fr' });
   });
 
@@ -181,6 +198,7 @@ describe('resolveTemplateRow', () => {
       'order_update',
       'en_US'
     );
+
     expect(resolved.malformed).toBe(true);
     expect(resolved.row).toBeNull();
   });
@@ -192,6 +210,7 @@ describe('resolveTemplateRow', () => {
       'order_update',
       'de'
     );
+
     expect(resolved.row).toBeNull();
     expect(resolved.language).toBe('de');
   });

@@ -21,6 +21,7 @@ export async function GET(request: Request) {
   try {
     const ctx = await requireApiKey(request);
     const name = await getAccountName(ctx.accountId);
+
     return ok({
       account: { id: ctx.accountId, name },
       key: { id: ctx.keyId, scopes: ctx.scopes },

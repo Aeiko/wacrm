@@ -17,8 +17,15 @@
  * are list-only and have no canvas analogue.
  */
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useTranslations } from 'next-intl';
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import { useTranslations } from 'use-intl';
 import {
   CircleAlert,
   Plus,
@@ -75,6 +82,7 @@ import { useFlowEditor, type BuilderState } from './flow-editor-state';
 
 export function FlowBuilder() {
   const t = useTranslations('Flows.builder');
+
   const {
     state,
     setState,
@@ -92,6 +100,7 @@ export function FlowBuilder() {
   const [expanded, setExpanded] = useState<Set<string>>(
     () => new Set(state.nodes.map((n) => n.node_key))
   );
+
   const nodeRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
   // Wrap addNode so the new node opens expanded in the list view
@@ -111,6 +120,7 @@ export function FlowBuilder() {
       setExpanded((prev) => {
         const next = new Set(prev);
         next.delete(key);
+
         return next;
       });
     },
@@ -120,8 +130,10 @@ export function FlowBuilder() {
   const toggleExpanded = useCallback((key: string) => {
     setExpanded((prev) => {
       const next = new Set(prev);
+
       if (next.has(key)) next.delete(key);
       else next.add(key);
+
       return next;
     });
   }, []);
@@ -142,8 +154,10 @@ export function FlowBuilder() {
   // flashKey; the flash auto-clears in the context so no timer here.
   const expandedWithFlash = useMemo(() => {
     if (!flashKey || expanded.has(flashKey)) return expanded;
+
     return new Set([...expanded, flashKey]);
   }, [expanded, flashKey]);
+
   useEffect(() => {
     if (!flashKey) return;
     // requestAnimationFrame defers the scroll until after React has
@@ -175,7 +189,9 @@ export function FlowBuilder() {
 
         {state.nodes.length === 0 ? (
           <div className="border-border bg-card/50 text-muted-foreground rounded-lg border border-dashed p-8 text-center text-sm">
-            {t.rich('nodesEmpty', { strong: (chunks) => <strong>{chunks}</strong> })}
+            {t.rich('nodesEmpty', {
+              strong: (chunks) => <strong>{chunks}</strong>,
+            })}
           </div>
         ) : (
           state.nodes.map((node) => (
@@ -236,6 +252,7 @@ function KeywordsInput({
       .split(',')
       .map((k) => k.trim())
       .filter(Boolean);
+
     setDraft(parsed.join(', '));
     onChange(parsed);
   }
@@ -274,7 +291,9 @@ function TriggerPanel({
 }) {
   return (
     <section className="border-border bg-card rounded-lg border p-4">
-      <h2 className="text-foreground mb-3 text-sm font-semibold">{t('triggerTitle')}</h2>
+      <h2 className="text-foreground mb-3 text-sm font-semibold">
+        {t('triggerTitle')}
+      </h2>
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
         <div>
           <label className="text-muted-foreground mb-1 block text-xs">
@@ -301,9 +320,7 @@ function TriggerPanel({
               <SelectItem value="first_inbound_message">
                 {t('triggerFirstInboundTitle')}
               </SelectItem>
-              <SelectItem value="manual">
-                {t('triggerManualTitle')}
-              </SelectItem>
+              <SelectItem value="manual">{t('triggerManualTitle')}</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -354,10 +371,13 @@ function EntryPicker({
   t: ReturnType<typeof useTranslations>;
 }) {
   if (state.nodes.length === 0) return null;
+
   return (
     <section className="border-border bg-card flex items-center gap-3 rounded-lg border p-3">
       <CornerDownRight className="text-primary h-4 w-4 shrink-0" />
-      <span className="text-muted-foreground text-xs">{t('entryNodeTitle')}</span>
+      <span className="text-muted-foreground text-xs">
+        {t('entryNodeTitle')}
+      </span>
       <NodeKeySelect
         value={state.entry_node_id}
         nodes={state.nodes}
@@ -402,11 +422,11 @@ function NodeCard({
   onSetEntry: () => void;
   t: ReturnType<typeof useTranslations>;
 }) {
-  const meta = NODE_META[node.node_type];
   const c = nodeColors(node.node_type);
   const hasError = issues.some((i) => i.severity === 'error');
   const tSummary = useTranslations('Flows.summary');
   const preview = summarizeNode(node, tSummary);
+
   return (
     <div
       ref={cardRef}
@@ -526,8 +546,10 @@ function NodeConfigWithAdvanced({
   t: ReturnType<typeof useTranslations>;
 }) {
   const [showAdvanced, setShowAdvanced] = useState(false);
+
   const hasReplyIds =
     node.node_type === 'send_buttons' || node.node_type === 'send_list';
+
   return (
     <div className="flex flex-col gap-3">
       <NodeConfigForm
@@ -579,7 +601,13 @@ function NodeConfigWithAdvanced({
 // Add-node menu
 // ============================================================
 
-function AddNodeButton({ onAdd, t }: { onAdd: (type: NodeType) => void; t: ReturnType<typeof useTranslations> }) {
+function AddNodeButton({
+  onAdd,
+  t,
+}: {
+  onAdd: (type: NodeType) => void;
+  t: ReturnType<typeof useTranslations>;
+}) {
   const types: NodeType[] = [
     'start',
     'send_buttons',
@@ -592,6 +620,7 @@ function AddNodeButton({ onAdd, t }: { onAdd: (type: NodeType) => void; t: Retur
     'handoff',
     'end',
   ];
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -615,6 +644,7 @@ function AddNodeButton({ onAdd, t }: { onAdd: (type: NodeType) => void; t: Retur
               </DropdownMenuLabel>
               {group.types.map((t_type) => {
                 const meta = NODE_META[t_type];
+
                 return (
                   <DropdownMenuItem key={t_type} onClick={() => onAdd(t_type)}>
                     <meta.icon className={cn('h-3.5 w-3.5', meta.color)} />

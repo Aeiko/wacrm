@@ -44,6 +44,7 @@ type RawTagJoin = { tags: { id: string; name: string; color: string } | null };
 /** Flatten a `CONTACT_SELECT` row into the public contact shape. */
 export function serializeContact(row: Record<string, unknown>): ApiContact {
   const joins = (row.contact_tags as RawTagJoin[] | undefined) ?? [];
+
   return {
     id: row.id as string,
     phone: row.phone as string,
@@ -79,7 +80,9 @@ export async function resolveAuditUserId(
     .select('user_id')
     .eq('account_id', accountId)
     .maybeSingle();
+
   const configOwner = config?.user_id as string | undefined;
+
   if (configOwner) return configOwner;
 
   const { data: account } = await db
@@ -87,10 +90,13 @@ export async function resolveAuditUserId(
     .select('owner_user_id')
     .eq('id', accountId)
     .maybeSingle();
+
   const owner = account?.owner_user_id as string | undefined;
+
   if (!owner) {
     throw new ContactError('Account owner could not be resolved', 500);
   }
+
   return owner;
 }
 
@@ -118,6 +124,7 @@ export async function findOrCreateContact(
   // otherwise be persisted and then misdelivered on every later send
   // (issue #586).
   const sanitized = parseInternationalPhone(input.phone);
+
   if (!sanitized) {
     throw new ContactError(
       "'phone' must be an international phone number with a leading + and country code (e.g. +14155550123)",
@@ -126,6 +133,7 @@ export async function findOrCreateContact(
   }
 
   const existing = await findExistingContact(db, accountId, sanitized);
+
   if (existing) return { id: existing.id, created: false };
 
   const { data: created, error } = await db
@@ -146,8 +154,10 @@ export async function findOrCreateContact(
     // rejected the duplicate. Re-resolve to the winner.
     if (isUniqueViolation(error)) {
       const raced = await findExistingContact(db, accountId, sanitized);
+
       if (raced) return { id: raced.id, created: false };
     }
+
     console.error('[api/v1/contacts] create error:', error);
     throw new ContactError('Failed to create contact', 500);
   }
@@ -195,13 +205,17 @@ async function syncContactTags(
     tagNames,
     canCreateTags: true,
   });
+
   // Same normalization `resolveImportTagIds` applies to `tagNames`
   // (trim, lowercase, skip empty) so every requested name resolves.
   const desired = new Set<string>();
+
   for (const raw of tagNames) {
     const key = raw.trim().toLowerCase();
+
     if (!key) continue;
     const tagId = tagIdByKey.get(key);
+
     if (tagId) desired.add(tagId);
   }
 
@@ -214,14 +228,15 @@ async function syncContactTags(
     .from('contact_tags')
     .select('tag_id')
     .eq('contact_id', contactId);
+
   if (readErr) {
     throw new ContactError('Failed to read contact tags', 500);
   }
-  const existing = new Set(
-    (current ?? []).map((r) => r.tag_id as string)
-  );
+
+  const existing = new Set((current ?? []).map((r) => r.tag_id as string));
 
   const toAdd = [...desired].filter((id) => !existing.has(id));
+
   const toRemove = removeUnrequested
     ? [...existing].filter((id) => !desired.has(id))
     : [];
@@ -232,8 +247,10 @@ async function syncContactTags(
       .delete()
       .eq('contact_id', contactId)
       .in('tag_id', toRemove);
+
     if (error) throw new ContactError('Failed to update contact tags', 500);
   }
+
   if (toAdd.length > 0) {
     for (const tagId of toAdd) {
       try {
@@ -263,7 +280,9 @@ export async function getContactById(
     .eq('id', contactId)
     .eq('account_id', accountId)
     .maybeSingle();
+
   if (error || !data) return null;
+
   return serializeContact(data as Record<string, unknown>);
 }
 

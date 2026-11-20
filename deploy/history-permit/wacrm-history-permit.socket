@@ -1,0 +1,15 @@
+[Unit]
+Description=Private WACRM history permit consume socket (default off)
+
+[Socket]
+ListenStream=/run/wacrm-history-permit/consume.sock
+Accept=yes
+SocketUser=root
+SocketGroup=wacrm-history-dispatch
+SocketMode=0660
+DirectoryMode=0755
+RemoveOnStop=yes
+MaxConnections=8
+
+[Install]
+WantedBy=sockets.target

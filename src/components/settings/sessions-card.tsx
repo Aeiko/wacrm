@@ -21,7 +21,7 @@ import {
   DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog';
-import { useTranslations } from 'next-intl';
+import { useTranslations } from 'use-intl';
 
 export function SessionsCard() {
   const t = useTranslations('Settings.profile');
@@ -31,15 +31,19 @@ export function SessionsCard() {
 
   const onConfirm = async () => {
     setSigningOut(true);
+
     try {
       // scope: 'global' revokes every refresh token for this user
       // across all devices; the next auth-state change on this tab
       // triggers the usual redirect.
       const { error } = await supabase.auth.signOut({ scope: 'global' });
+
       if (error) {
         toast.error(t('signOutFailed', { message: error.message }));
+
         return;
       }
+
       window.location.href = '/login';
     } catch (err) {
       const msg = err instanceof Error ? err.message : t('unknownError');
@@ -53,8 +57,8 @@ export function SessionsCard() {
     <>
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-foreground">
-            <LogOut className="size-4 text-primary" />
+          <CardTitle className="text-foreground flex items-center gap-2">
+            <LogOut className="text-primary size-4" />
             {t('sessionsTitle')}
           </CardTitle>
           <CardDescription className="text-muted-foreground">
@@ -62,11 +66,7 @@ export function SessionsCard() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => setOpen(true)}
-          >
+          <Button type="button" variant="outline" onClick={() => setOpen(true)}>
             <LogOut className="size-4" />
             {t('signOutAll')}
           </Button>
@@ -77,9 +77,7 @@ export function SessionsCard() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{t('signOutConfirmTitle')}</DialogTitle>
-            <DialogDescription>
-              {t('signOutConfirmDesc')}
-            </DialogDescription>
+            <DialogDescription>{t('signOutConfirmDesc')}</DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button

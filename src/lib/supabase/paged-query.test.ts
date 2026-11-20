@@ -13,11 +13,17 @@ import {
 function cappedSource(total: number, maxRows: number) {
   const rows = Array.from({ length: total }, (_, i) => i);
   const calls: [number, number][] = [];
-  const fetchPage = async (from: number, to: number): Promise<PageResult<number>> => {
+
+  const fetchPage = async (
+    from: number,
+    to: number
+  ): Promise<PageResult<number>> => {
     calls.push([from, to]);
     const end = Math.min(to + 1, from + maxRows);
+
     return { data: rows.slice(from, end), error: null };
   };
+
   return { fetchPage, calls };
 }
 
@@ -66,12 +72,14 @@ describe('fetchAllPages', () => {
   });
 
   it('treats null data as the end', async () => {
-    expect(await fetchAllPages(async () => ({ data: null, error: null }))).toEqual([]);
+    expect(
+      await fetchAllPages(async () => ({ data: null, error: null }))
+    ).toEqual([]);
   });
 
   it('throws the PostgREST error message', async () => {
     await expect(
-      fetchAllPages(async () => ({ data: null, error: { message: 'boom' } })),
+      fetchAllPages(async () => ({ data: null, error: { message: 'boom' } }))
     ).rejects.toThrow('boom');
   });
 });
@@ -79,10 +87,13 @@ describe('fetchAllPages', () => {
 describe('fetchAllInChunks', () => {
   it('makes no request for an empty list', async () => {
     let calls = 0;
+
     const rows = await fetchAllInChunks([], async () => {
       calls++;
+
       return { data: [], error: null };
     });
+
     expect(rows).toEqual([]);
     expect(calls).toBe(0);
   });
@@ -90,15 +101,18 @@ describe('fetchAllInChunks', () => {
   it('chunks the values and pages each chunk', async () => {
     const values = Array.from({ length: 250 }, (_, i) => i);
     const seen: number[][] = [];
+
     const rows = await fetchAllInChunks(
       values,
       async (slice, from) => {
         if (from === 0) seen.push(slice);
         const fanOut = slice.flatMap((v) => [v, v + 0.5]);
+
         return { data: fanOut.slice(from, from + 30), error: null };
       },
-      100,
+      100
     );
+
     expect(seen.map((s) => s.length)).toEqual([100, 100, 50]);
     expect(rows).toHaveLength(500);
   });
@@ -128,6 +142,7 @@ describe('fetchPagesUpTo', () => {
       data: null,
       error: { message: 'boom' },
     });
+
     await expect(fetchPagesUpTo(failing, 10)).rejects.toThrow('boom');
   });
 });

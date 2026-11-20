@@ -20,6 +20,8 @@ export function resolveVerifyTokenForSave(
   existingEncrypted: string | null
 ): string | null {
   const trimmed = typeof incoming === 'string' ? incoming.trim() : '';
+
   if (trimmed) return encrypt(trimmed);
+
   return existingEncrypted ?? null;
 }

@@ -29,8 +29,10 @@ import type { MessageTemplate } from '@/types';
  */
 export function renderTemplateBody(body: string, params: string[]): string {
   const keys = extractTemplateVariables(body);
+
   return body.replace(/\{\{([A-Za-z0-9_]+)\}\}/g, (match, key: string) => {
     const idx = keys.indexOf(key);
+
     return (idx >= 0 ? params[idx] : undefined) ?? match;
   });
 }
@@ -55,6 +57,7 @@ export function templateBodyParams(
       : null;
 
   if (structured && structured.length > 0) return structured;
+
   return Array.isArray(templateParams) ? templateParams : [];
 }
 
@@ -89,7 +92,8 @@ export interface ResolvedTemplate {
  * synced from Meta commonly carry the bare `en`, so a caller that
  * omitted the language matched no row: no header components, and no
  * body to persist. Matching falls back through
- * exact → same base language → a sensible default.
+ * exact → same base language → a sensible default. Query errors throw;
+ * only a successful lookup can confirm that the local row is missing.
  */
 export async function resolveTemplateRow(
   db: SupabaseClient,
@@ -97,11 +101,13 @@ export async function resolveTemplateRow(
   templateName: string,
   requestedLanguage?: string | null
 ): Promise<ResolvedTemplate> {
-  const { data } = await db
+  const { data, error } = await db
     .from('message_templates')
     .select('*')
     .eq('account_id', accountId)
     .eq('name', templateName);
+
+  if (error) throw error;
 
   // Sorted here rather than with `.order()` so the only query-builder
   // surface this helper depends on is select + eq — the same shape the
@@ -109,6 +115,7 @@ export async function resolveTemplateRow(
   const rows = ((Array.isArray(data) ? data : []) as { language?: string }[])
     .slice()
     .sort((a, b) => (a.language ?? '').localeCompare(b.language ?? ''));
+
   const fallbackLanguage = requestedLanguage || 'en_US';
 
   if (rows.length === 0) {
@@ -119,12 +126,15 @@ export async function resolveTemplateRow(
     if (requestedLanguage) {
       const wanted = requestedLanguage.toLowerCase();
       const exact = rows.find((r) => r.language?.toLowerCase() === wanted);
+
       if (exact) return exact;
       const wantedBase = baseLanguage(requestedLanguage);
+
       return rows.find(
         (r) => r.language && baseLanguage(r.language) === wantedBase
       );
     }
+
     // No language asked for: prefer the historical default, then the
     // bare form Meta's sync produces, then whatever exists.
     return (
@@ -135,6 +145,7 @@ export async function resolveTemplateRow(
   };
 
   const chosen = pick();
+
   if (!chosen) {
     // Rows exist but none in the requested language — the caller pinned
     // a translation this account hasn't synced. Send it anyway; Meta is
@@ -169,7 +180,9 @@ export function templateContentText(
   callerText?: string | null
 ): string | null {
   if (callerText) return callerText;
+
   if (!row?.body_text) return null;
+
   return renderTemplateBody(row.body_text, params);
 }
 
@@ -178,6 +191,7 @@ export function templateHeaderMediaUrl(
   templateMessageParams?: unknown
 ): string | null {
   if (!row?.header_type || row.header_type === 'text') return null;
+
   const params =
     templateMessageParams && typeof templateMessageParams === 'object'
       ? (templateMessageParams as {
@@ -185,11 +199,14 @@ export function templateHeaderMediaUrl(
           headerMediaId?: unknown;
         })
       : {};
+
   if (typeof params.headerMediaUrl === 'string' && params.headerMediaUrl) {
     return params.headerMediaUrl;
   }
+
   if (typeof params.headerMediaId === 'string' && params.headerMediaId) {
     return null;
   }
+
   return row.header_media_url || null;
 }

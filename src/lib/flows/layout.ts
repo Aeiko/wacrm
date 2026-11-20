@@ -22,7 +22,7 @@
  * reload.
  */
 
-import Dagre from "@dagrejs/dagre";
+import Dagre from '@dagrejs/dagre';
 
 export interface LayoutNode {
   id: string;
@@ -43,7 +43,7 @@ export interface LayoutPosition {
 
 export interface LayoutOptions {
   /** Top-to-bottom is the natural reading order for conversation flows. */
-  direction?: "TB" | "LR";
+  direction?: 'TB' | 'LR';
   /** Gap between rows (TB) / columns (LR). */
   rankSep?: number;
   /** Gap between sibling nodes within the same rank. */
@@ -55,7 +55,7 @@ export interface LayoutOptions {
 }
 
 const DEFAULTS: Required<LayoutOptions> = {
-  direction: "TB",
+  direction: 'TB',
   rankSep: 80,
   nodeSep: 60,
   defaultWidth: 240,
@@ -72,11 +72,12 @@ const DEFAULTS: Required<LayoutOptions> = {
  * Better to leave the new nodes at 0,0 and let the user drag them.
  */
 export function shouldAutoLayout(
-  nodes: Array<{ position_x?: number | null; position_y?: number | null }>,
+  nodes: Array<{ position_x?: number | null; position_y?: number | null }>
 ): boolean {
   if (nodes.length === 0) return false;
+
   return nodes.every(
-    (n) => (n.position_x ?? 0) === 0 && (n.position_y ?? 0) === 0,
+    (n) => (n.position_x ?? 0) === 0 && (n.position_y ?? 0) === 0
   );
 }
 
@@ -89,7 +90,7 @@ export function shouldAutoLayout(
 export function autoLayout(
   nodes: LayoutNode[],
   edges: LayoutEdge[],
-  options: LayoutOptions = {},
+  options: LayoutOptions = {}
 ): Map<string, LayoutPosition> {
   const opts = { ...DEFAULTS, ...options };
   const g = new Dagre.graphlib.Graph().setDefaultEdgeLabel(() => ({}));
@@ -105,6 +106,7 @@ export function autoLayout(
       height: n.height ?? opts.defaultHeight,
     });
   }
+
   for (const e of edges) {
     // Dagre tolerates edges to/from non-existent nodes by inserting
     // them as zero-size — that would silently warp the layout. Skip
@@ -118,8 +120,10 @@ export function autoLayout(
   Dagre.layout(g);
 
   const positions = new Map<string, LayoutPosition>();
+
   for (const n of nodes) {
     const laid = g.node(n.id);
+
     if (!laid) continue;
     // Dagre returns the center; React-Flow wants the top-left.
     positions.set(n.id, {
@@ -127,5 +131,6 @@ export function autoLayout(
       y: laid.y - (n.height ?? opts.defaultHeight) / 2,
     });
   }
+
   return positions;
 }

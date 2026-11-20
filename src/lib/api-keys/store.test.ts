@@ -13,6 +13,7 @@ vi.mock('@/lib/flows/admin-client', () => ({
       eq: () => builder,
       maybeSingle: async () => lookup.result,
     };
+
     return { from: () => builder };
   },
 }));

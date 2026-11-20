@@ -29,6 +29,7 @@ export function buildSignatureHeader(
   const signature = createHmac('sha256', secret)
     .update(`${timestampSeconds}.${rawBody}`)
     .digest('hex');
+
   return `t=${timestampSeconds},v1=${signature}`;
 }
 
@@ -47,22 +48,28 @@ export function verifySignatureHeader(
   const parts = Object.fromEntries(
     header.split(',').map((kv) => {
       const i = kv.indexOf('=');
+
       return [kv.slice(0, i).trim(), kv.slice(i + 1)];
     })
   );
+
   const t = Number(parts.t);
   // Normalize the presented signature: hex is case-insensitive and a
   // header may carry stray whitespace (e.g. `t=…, v1=…`), so lower-case
   // and trim before the constant-time compare.
   const v1 = typeof parts.v1 === 'string' ? parts.v1.trim().toLowerCase() : '';
+
   if (!Number.isFinite(t) || !v1) return false;
+
   if (Math.abs(nowSeconds - t) > toleranceSeconds) return false;
 
   const expected = createHmac('sha256', secret)
     .update(`${t}.${rawBody}`)
     .digest('hex');
+
   // Constant-time compare; guard against length mismatch (timingSafeEqual
   // throws on unequal-length buffers).
   if (expected.length !== v1.length) return false;
+
   return timingSafeEqual(Buffer.from(expected), Buffer.from(v1));
 }

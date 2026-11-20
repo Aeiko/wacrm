@@ -54,10 +54,13 @@ export function isApiScope(value: unknown): value is ApiScope {
 export function normalizeScopes(input: unknown): ApiScope[] | null {
   if (!Array.isArray(input)) return null;
   const out: ApiScope[] = [];
+
   for (const entry of input) {
     if (!isApiScope(entry)) return null;
+
     if (!out.includes(entry)) out.push(entry);
   }
+
   return out;
 }
 

@@ -52,6 +52,7 @@ export interface ApiMessage {
  */
 export function serializeConversation(conv: Conversation): ApiConversation {
   const c = conv.contact;
+
   return {
     id: conv.id,
     contact_id: conv.contact_id,

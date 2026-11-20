@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useTranslations } from 'next-intl';
+import { useTranslations } from 'use-intl';
 import { Bot, Sparkles, Settings2, BarChart3 } from 'lucide-react';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { AiPlayground } from '@/components/agents/ai-playground';
@@ -26,6 +26,7 @@ export default function AgentsPage() {
       try {
         const res = await fetch('/api/ai/config');
         const data = await res.json().catch(() => ({}));
+
         if (!cancelled) setTab(data?.configured ? 'playground' : 'setup');
       } catch {
         if (!cancelled) setTab('setup');
@@ -33,6 +34,7 @@ export default function AgentsPage() {
         if (!cancelled) setDecided(true);
       }
     })();
+
     return () => {
       cancelled = true;
     };
@@ -41,14 +43,12 @@ export default function AgentsPage() {
   return (
     <div>
       <div className="flex items-center gap-2">
-        <Bot className="h-6 w-6 text-primary" />
-        <h1 className="text-2xl font-bold tracking-tight text-foreground">
+        <Bot className="text-primary h-6 w-6" />
+        <h1 className="text-foreground text-2xl font-bold tracking-tight">
           {t('title')}
         </h1>
       </div>
-      <p className="mt-1 text-sm text-muted-foreground">
-        {t('description')}
-      </p>
+      <p className="text-muted-foreground mt-1 text-sm">{t('description')}</p>
 
       {decided && (
         <Tabs

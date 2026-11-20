@@ -39,6 +39,7 @@ export function handle<A>(
       if (err instanceof WacrmApiError) {
         return errorResult(`wacrm API error [${err.code}]: ${err.message}`);
       }
+
       return errorResult(`Unexpected error: ${(err as Error).message}`);
     }
   };

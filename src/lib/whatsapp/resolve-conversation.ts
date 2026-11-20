@@ -49,6 +49,7 @@ export async function resolveConversationByPhone(
   // code is explicit — "4155551212" would otherwise be delivered to
   // Switzerland, not the US (issue #586).
   const sanitized = parseInternationalPhone(phone);
+
   if (!sanitized) {
     throw new SendMessageError(
       'bad_request',
@@ -64,6 +65,7 @@ export async function resolveConversationByPhone(
     .select('id')
     .eq('account_id', accountId)
     .maybeSingle();
+
   if (!config) {
     throw new SendMessageError(
       'whatsapp_not_configured',
@@ -79,12 +81,14 @@ export async function resolveConversationByPhone(
   // if the owner can't be resolved — remap it to the send error family
   // the callers already handle.
   let ownerUserId: string;
+
   try {
     ownerUserId = await resolveAuditUserId(db, accountId);
   } catch (err) {
     if (err instanceof ContactError) {
       throw new SendMessageError('db_error', err.message, err.status);
     }
+
     throw err;
   }
 
@@ -93,6 +97,7 @@ export async function resolveConversationByPhone(
   let contactCreated = false;
 
   const existing = await findExistingContact(db, accountId, sanitized);
+
   if (existing) {
     contactId = existing.id;
   } else {
@@ -112,6 +117,7 @@ export async function resolveConversationByPhone(
       // unique index (migration 022) rejected the duplicate. Re-resolve.
       if (isUniqueViolation(createErr)) {
         const raced = await findExistingContact(db, accountId, sanitized);
+
         if (raced) {
           contactId = raced.id;
         } else {
@@ -177,7 +183,11 @@ async function findOrCreateConversationRow(
 
   if (findErr) {
     console.error('[resolve-conversation] conversation lookup error:', findErr);
-    throw new SendMessageError('db_error', 'Failed to resolve conversation', 500);
+    throw new SendMessageError(
+      'db_error',
+      'Failed to resolve conversation',
+      500
+    );
   }
 
   if (existing && existing.length > 0) {
@@ -203,12 +213,18 @@ async function findOrCreateConversationRow(
         .eq('contact_id', contactId)
         .order('created_at', { ascending: true })
         .limit(1);
+
       if (raced && raced.length > 0) {
         return { id: raced[0].id, created: false };
       }
     }
+
     console.error('[resolve-conversation] conversation create error:', convErr);
-    throw new SendMessageError('db_error', 'Failed to create conversation', 500);
+    throw new SendMessageError(
+      'db_error',
+      'Failed to create conversation',
+      500
+    );
   }
 
   return { id: newConv.id, created: true };

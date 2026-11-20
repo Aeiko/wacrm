@@ -47,8 +47,10 @@ import { isIP } from 'node:net';
 /** The four octets of a strict dotted-quad IPv4 literal, else null. */
 function parseIPv4(ip: string): number[] | null {
   const m = ip.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+
   if (!m) return null;
   const octets = m.slice(1, 5).map(Number);
+
   return octets.every((o) => o <= 255) ? octets : null;
 }
 
@@ -58,19 +60,33 @@ function parseIPv4(ip: string): number[] | null {
  */
 function isReservedIPv4([a, b, c]: number[]): boolean {
   if (a === 0) return true; // 0.0.0.0/8 "this host"
+
   if (a === 10) return true; // private
+
   if (a === 127) return true; // loopback
+
   if (a === 169 && b === 254) return true; // link-local + cloud metadata
+
   if (a === 172 && b >= 16 && b <= 31) return true; // private
+
   if (a === 192 && b === 168) return true; // private
+
   if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT
+
   if (a === 192 && b === 0 && c === 0) return true; // IETF protocol assignments
+
   if (a === 192 && b === 0 && c === 2) return true; // TEST-NET-1
+
   if (a === 192 && b === 88 && c === 99) return true; // 6to4 relay anycast
+
   if (a === 198 && (b === 18 || b === 19)) return true; // benchmarking
+
   if (a === 198 && b === 51 && c === 100) return true; // TEST-NET-2
+
   if (a === 203 && b === 0 && c === 113) return true; // TEST-NET-3
+
   if (a >= 224) return true; // multicast 224/4 + reserved 240/4 + broadcast
+
   return false;
 }
 
@@ -83,42 +99,58 @@ function isReservedIPv4([a, b, c]: number[]): boolean {
  */
 function parseIPv6(ip: string): number[] | null {
   const addr = ip.split('%')[0];
+
   if (addr.length === 0) return null;
 
   const halves = addr.split('::');
+
   if (halves.length > 2) return null; // "::" may appear at most once
 
   const groupsOf = (part: string): number[][] | null => {
     if (part === '') return [];
     const out: number[][] = [];
     const chunks = part.split(':');
+
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
+
       // A dotted-quad tail occupies the last two groups.
       if (i === chunks.length - 1 && chunk.includes('.')) {
         const v4 = parseIPv4(chunk);
+
         if (!v4) return null;
         out.push([v4[0], v4[1]], [v4[2], v4[3]]);
         continue;
       }
+
       if (!/^[0-9a-f]{1,4}$/i.test(chunk)) return null;
       const n = parseInt(chunk, 16);
       out.push([n >> 8, n & 0xff]);
     }
+
     return out;
   };
 
   const head = groupsOf(halves[0]);
   const tail = halves.length === 2 ? groupsOf(halves[1]) : [];
+
   if (!head || !tail) return null;
 
   if (halves.length === 1) {
     if (head.length !== 8) return null;
+
     return head.flat();
   }
+
   const fill = 8 - head.length - tail.length;
+
   if (fill < 1) return null; // "::" must stand for at least one group
-  return [...head.flat(), ...new Array(fill * 2).fill(0), ...tail.flat()];
+
+  return [
+    ...head.flat(),
+    ...Array.from({ length: fill * 2 }, () => 0),
+    ...tail.flat(),
+  ];
 }
 
 /** True for any IPv6 address outside global unicast. */
@@ -155,17 +187,22 @@ function isReservedIPv6(b: number[]): boolean {
     // Teredo 2001::/32 always embeds a client IPv4 (bit-inverted) and
     // is deprecated; block the prefix outright.
     if (b[2] === 0x00 && b[3] === 0x00) return true;
+
     // ORCHID 2001:10::/28 and 2001:20::/28 — non-routed identifiers.
     if (b[2] === 0x00 && ((b[3] & 0xf0) === 0x10 || (b[3] & 0xf0) === 0x20)) {
       return true;
     }
+
     // 2001:db8::/32 documentation.
     if (b[2] === 0x0d && b[3] === 0xb8) return true;
   }
 
   if (b[0] === 0xfe && (b[1] & 0xc0) === 0x80) return true; // fe80::/10 link-local
+
   if ((b[0] & 0xfe) === 0xfc) return true; // fc00::/7 ULA
+
   if (b[0] === 0xff) return true; // ff00::/8 multicast
+
   // 100::/64 discard-only.
   if (b[0] === 0x01 && b.slice(1, 8).every((x) => x === 0)) return true;
 
@@ -179,12 +216,17 @@ function isReservedIPv6(b: number[]): boolean {
  * Fails closed: an address this can't parse is reported as reserved.
  */
 export function isPrivateOrReservedIp(ip: string): boolean {
-  const bare = ip.trim().toLowerCase().replace(/^\[|\]$/g, '');
+  const bare = ip
+    .trim()
+    .toLowerCase()
+    .replace(/^\[|\]$/g, '');
 
   const v4 = parseIPv4(bare);
+
   if (v4) return isReservedIPv4(v4);
 
   const v6 = parseIPv6(bare);
+
   if (v6) return isReservedIPv6(v6);
 
   return true; // unparseable → not demonstrably public
@@ -197,17 +239,25 @@ export function isPrivateOrReservedIp(ip: string): boolean {
  * be used without turning arbitrary private addresses into valid targets.
  */
 export interface DeliverableUrlOptions {
-  allowPrivateHosts?: Iterable<string>
+  allowPrivateHosts?: Iterable<string>;
 }
 
 function normalizedHostSet(hosts: Iterable<string> | undefined): Set<string> {
-  const out = new Set<string>()
-  if (!hosts) return out
+  const out = new Set<string>();
+
+  if (!hosts) return out;
+
   for (const host of hosts) {
-    const value = host.trim().toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '')
-    if (value) out.add(value)
+    const value = host
+      .trim()
+      .toLowerCase()
+      .replace(/^\[|\]$/g, '')
+      .replace(/\.$/, '');
+
+    if (value) out.add(value);
   }
-  return out
+
+  return out;
 }
 
 /**
@@ -219,9 +269,10 @@ function normalizedHostSet(hosts: Iterable<string> | undefined): Set<string> {
  */
 export async function isDeliverableUrl(
   rawUrl: string,
-  options: DeliverableUrlOptions = {},
+  options: DeliverableUrlOptions = {}
 ): Promise<boolean> {
   let host: string;
+
   try {
     host = new URL(rawUrl).hostname.replace(/^\[|\]$/g, '');
   } catch {
@@ -229,8 +280,9 @@ export async function isDeliverableUrl(
   }
 
   const lower = host.toLowerCase().replace(/\.$/, '');
-  const allowPrivateHosts = normalizedHostSet(options.allowPrivateHosts)
-  if (allowPrivateHosts.has(lower)) return true
+  const allowPrivateHosts = normalizedHostSet(options.allowPrivateHosts);
+
+  if (allowPrivateHosts.has(lower)) return true;
 
   if (isIP(host)) return !isPrivateOrReservedIp(host);
 
@@ -245,7 +297,9 @@ export async function isDeliverableUrl(
 
   try {
     const results = await lookup(host, { all: true });
+
     if (results.length === 0) return false;
+
     return results.every((r) => !isPrivateOrReservedIp(r.address));
   } catch {
     return false; // unresolvable → not deliverable

@@ -1,9 +1,13 @@
-import type { Message } from "@/types";
-import { loadMediaBlob, MediaResponseError } from "./blob-cache";
-import { mediaFilename } from "./filename";
-import { getT } from "@/lib/i18n/translate";
+import type { Message } from '@/types';
+import {
+  isPrivateMediaUrl,
+  loadMediaBlob,
+  MediaResponseError,
+} from './blob-cache';
+import { mediaFilename } from './filename';
+import { getT } from '@/lib/i18n/translate';
 
-const t = getT("LibErrors");
+const t = getT('LibErrors');
 
 /**
  * Save a chat attachment to the agent's machine.
@@ -21,16 +25,20 @@ const t = getT("LibErrors");
  */
 export async function downloadMediaMessage(message: Message): Promise<void> {
   const url = message.media_url;
-  if (!url) throw new Error(t("media.noAttachment"));
+
+  if (!url) throw new Error(t('media.noAttachment'));
 
   let blob: Blob;
+
   try {
     blob = await loadMediaBlob(url);
   } catch (error) {
     // A refused *response* is a real failure — inbound media Meta has
     // expired 401s here, and quietly opening a tab onto that error would
     // hide it. Let the caller toast instead.
-    if (error instanceof MediaResponseError) throw error;
+    if (isPrivateMediaUrl(url) || error instanceof MediaResponseError)
+      throw error;
+
     // A fetch that never completed is the other case: a bucket with a
     // stricter CORS policy than ours can block the XHR while the browser
     // is still perfectly able to navigate to the object. Handing the URL
@@ -40,6 +48,7 @@ export async function downloadMediaMessage(message: Message): Promise<void> {
   }
 
   const objectUrl = URL.createObjectURL(blob);
+
   try {
     clickAnchor({
       href: objectUrl,
@@ -53,8 +62,9 @@ export async function downloadMediaMessage(message: Message): Promise<void> {
 }
 
 function openInNewTab(url: string): boolean {
-  if (typeof document === "undefined") return false;
-  clickAnchor({ href: url, target: "_blank" });
+  if (typeof document === 'undefined') return false;
+  clickAnchor({ href: url, target: '_blank' });
+
   return true;
 }
 
@@ -68,14 +78,17 @@ function clickAnchor(attrs: {
   download?: string;
   target?: string;
 }): void {
-  const a = document.createElement("a");
+  const a = document.createElement('a');
   a.href = attrs.href;
+
   if (attrs.download) a.download = attrs.download;
+
   if (attrs.target) {
     a.target = attrs.target;
-    a.rel = "noopener noreferrer";
+    a.rel = 'noopener noreferrer';
   }
-  a.style.display = "none";
+
+  a.style.display = 'none';
   document.body.appendChild(a);
   a.click();
   a.remove();

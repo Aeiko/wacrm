@@ -23,7 +23,7 @@
 // ('base64url')` lands at 43 characters; hex would be 64.
 // ============================================================
 
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes } from 'node:crypto';
 
 /** Default invite link lifetime if the caller doesn't specify. */
 export const DEFAULT_INVITE_EXPIRY_DAYS = 7;
@@ -45,7 +45,8 @@ export interface GeneratedToken {
  * `account_invitations.token_hash`.
  */
 export function generateInviteToken(): GeneratedToken {
-  const token = randomBytes(32).toString("base64url");
+  const token = randomBytes(32).toString('base64url');
+
   return { token, hash: hashInviteToken(token) };
 }
 
@@ -55,7 +56,7 @@ export function generateInviteToken(): GeneratedToken {
  * Pure function — same input always produces the same output.
  */
 export function hashInviteToken(token: string): string {
-  return createHash("sha256").update(token).digest("hex");
+  return createHash('sha256').update(token).digest('hex');
 }
 
 /**
@@ -68,7 +69,8 @@ export function hashInviteToken(token: string): string {
  * without sweating slash hygiene).
  */
 export function inviteUrl(token: string, baseUrl: string): string {
-  const trimmed = baseUrl.replace(/\/+$/, "");
+  const trimmed = baseUrl.replace(/\/+$/, '');
+
   return `${trimmed}/join/${token}`;
 }
 
@@ -81,10 +83,11 @@ export function inviteUrl(token: string, baseUrl: string): string {
  */
 export function inviteExpiresAt(
   expiresInDays: number | undefined,
-  now: Date = new Date(),
+  now: Date = new Date()
 ): Date {
   const days = clampExpiryDays(expiresInDays);
   const ms = days * 24 * 60 * 60 * 1000;
+
   return new Date(now.getTime() + ms);
 }
 
@@ -97,5 +100,6 @@ export function clampExpiryDays(expiresInDays: number | undefined): number {
   ) {
     return DEFAULT_INVITE_EXPIRY_DAYS;
   }
+
   return Math.min(Math.floor(expiresInDays), MAX_INVITE_EXPIRY_DAYS);
 }

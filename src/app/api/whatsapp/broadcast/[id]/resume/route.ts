@@ -60,10 +60,12 @@ export async function POST(
       `broadcast-resume:${userId}`,
       RATE_LIMITS.broadcast
     );
+
     if (!limit.success) return rateLimitResponse(limit);
 
     const { id } = await params;
     const body = await request.json().catch(() => ({}));
+
     const scope: ResumeScope = RESUME_SCOPES.includes(body?.scope)
       ? body.scope
       : 'pending';
@@ -74,15 +76,16 @@ export async function POST(
     // WhatsApp message cannot be recalled. The claim is one conditional
     // UPDATE, so exactly one caller wins.
     const claimed = await claimBroadcastDelivery(supabase, accountId, id);
+
     if (!claimed) {
       return NextResponse.json(
         {
-          error:
-            t('broadcast.alreadyRunning'),
+          error: t('broadcast.alreadyRunning'),
         },
         { status: 409 }
       );
     }
+
     claimedId = id;
 
     const { plan, remaining, unsendable } = await planBroadcastResume(
@@ -132,15 +135,20 @@ export async function POST(
     // Planning failed after the claim — release it, or the campaign is
     // locked out of resuming until the staleness window expires.
     if (claimedId) {
-      await releaseBroadcastDelivery(supabaseAdmin(), claimedId).catch(() => {});
+      await releaseBroadcastDelivery(supabaseAdmin(), claimedId).catch(
+        () => {}
+      );
     }
+
     if (error instanceof BroadcastError) {
       return NextResponse.json(
         { error: error.message, code: error.code },
         { status: error.status }
       );
     }
+
     console.error('Error in broadcast resume POST:', error);
+
     return toErrorResponse(error);
   }
 }

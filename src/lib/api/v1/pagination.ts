@@ -42,6 +42,7 @@ export function parseListParams(request: Request): ListParams {
   const url = new URL(request.url);
 
   const rawLimit = Number(url.searchParams.get('limit'));
+
   const limit =
     Number.isFinite(rawLimit) && rawLimit > 0
       ? Math.min(Math.floor(rawLimit), MAX_LIMIT)
@@ -81,17 +82,22 @@ function isIsoTimestamp(value: string): boolean {
 /** Decode a cursor string, or null if missing/malformed/untrusted. */
 export function decodeCursor(value: string | null): Cursor | null {
   if (!value) return null;
+
   try {
     const decoded = Buffer.from(value, 'base64url').toString('utf8');
     const sep = decoded.indexOf('|');
+
     if (sep === -1) return null;
     const createdAt = decoded.slice(0, sep);
     const id = decoded.slice(sep + 1);
+
     // Reject anything that isn't a plausible server-issued cursor: an
     // ISO-8601 timestamp and a UUID. This is what keeps the raw
     // interpolation in `keysetFilter` safe.
     if (!UUID_RE.test(id)) return null;
+
     if (!isIsoTimestamp(createdAt)) return null;
+
     return { createdAt, id };
   } catch {
     return null;
@@ -113,6 +119,7 @@ export function decodeCursor(value: string | null): Cursor | null {
  */
 export function keysetFilter(cursor: Cursor | null): string | null {
   if (!cursor) return null;
+
   return `created_at.lt.${cursor.createdAt},and(created_at.eq.${cursor.createdAt},id.lt.${cursor.id})`;
 }
 
@@ -128,6 +135,8 @@ export function buildPage<T extends { created_at: string; id: string }>(
   if (rows.length <= limit) {
     return { items: rows, nextCursor: null };
   }
+
   const items = rows.slice(0, limit);
+
   return { items, nextCursor: encodeCursor(items[items.length - 1]) };
 }

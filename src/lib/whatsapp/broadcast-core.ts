@@ -28,6 +28,7 @@ import {
 import { resolveTemplateRow } from '@/lib/whatsapp/template-body';
 import type { MessageTemplate } from '@/types';
 import { findOrCreateContact } from '@/lib/api/v1/contacts';
+import { withStoredSendConnection } from '@/lib/whatsapp/coexistence/send-guard';
 
 /** Thrown by createBroadcast on a caller-visible failure; route maps it. */
 export class BroadcastError extends Error {
@@ -62,6 +63,9 @@ interface PlannedRecipient {
 }
 
 export interface BroadcastPlan {
+  accountId: string;
+  send_config_id: string | null;
+  send_generation: string | null;
   broadcastId: string;
   templateName: string;
   templateLanguage: string;
@@ -96,6 +100,7 @@ export async function createBroadcast(
   if (!templateName) {
     throw new BroadcastError('bad_request', "'template_name' is required", 400);
   }
+
   if (!Array.isArray(recipients) || recipients.length === 0) {
     throw new BroadcastError(
       'bad_request',
@@ -103,6 +108,7 @@ export async function createBroadcast(
       400
     );
   }
+
   if (recipients.length > MAX_RECIPIENTS) {
     throw new BroadcastError(
       'bad_request',
@@ -118,6 +124,7 @@ export async function createBroadcast(
     .select('*')
     .eq('account_id', accountId)
     .single();
+
   if (configError || !config) {
     throw new BroadcastError(
       'whatsapp_not_configured',
@@ -125,6 +132,7 @@ export async function createBroadcast(
       400
     );
   }
+
   const accessToken = decrypt(config.access_token);
 
   // Template row (once) for header/button components; guard a
@@ -135,6 +143,7 @@ export async function createBroadcast(
     templateName,
     params.templateLanguage
   );
+
   if (resolvedTemplate.malformed) {
     throw new BroadcastError(
       'template_malformed',
@@ -142,6 +151,7 @@ export async function createBroadcast(
       500
     );
   }
+
   const templateRow = resolvedTemplate.row;
 
   // Resolve each recipient to a contact. Invalid phones are dropped
@@ -151,16 +161,20 @@ export async function createBroadcast(
   // country its leading digits spell (issue #586).
   const resolved: { contactId: string; phone: string; params: string[] }[] = [];
   let rejected = 0;
+
   for (const r of recipients) {
     const to = typeof r.to === 'string' ? r.to : '';
     const sanitized = parseInternationalPhone(to);
+
     if (!sanitized) {
       rejected++;
       continue;
     }
+
     const { id } = await findOrCreateContact(db, accountId, auditUserId, {
       phone: to,
     });
+
     resolved.push({
       contactId: id,
       phone: sanitized,
@@ -176,9 +190,11 @@ export async function createBroadcast(
   // params aren't silently overwritten by a later duplicate — and so
   // the row↔params pairing below (keyed by contact_id) is unambiguous.
   const seenContact = new Set<string>();
+
   const deduped = resolved.filter((r) => {
     if (seenContact.has(r.contactId)) return false;
     seenContact.add(r.contactId);
+
     return true;
   });
 
@@ -220,6 +236,7 @@ export async function createBroadcast(
       p_template_params: deduped.map((r) => r.params),
     }
   );
+
   if (createErr || !createdRows || createdRows.length === 0) {
     console.error('[broadcast-core] create broadcast error:', createErr);
     throw new BroadcastError('internal', 'Failed to create broadcast', 500);
@@ -227,17 +244,41 @@ export async function createBroadcast(
 
   const broadcastId = createdRows[0].broadcast_id as string;
 
+  const { data: broadcast, error: broadcastError } = await db
+    .from('broadcasts')
+    .select('send_config_id, send_generation')
+    .eq('id', broadcastId)
+    .eq('account_id', accountId)
+    .single();
+
+  if (broadcastError || !broadcast) {
+    throw new BroadcastError(
+      'internal',
+      'Failed to load broadcast connection',
+      500
+    );
+  }
+
   // Pair each inserted recipient row back to its phone/params by
   // contact_id — unambiguous now that duplicates are collapsed.
   const byContact = new Map(deduped.map((r) => [r.contactId, r]));
+
   const planned: PlannedRecipient[] = createdRows.map(
     (row: { recipient_id: string; contact_id: string }) => {
       const r = byContact.get(row.contact_id)!;
-      return { recipientRowId: row.recipient_id, phone: r.phone, params: r.params };
+
+      return {
+        recipientRowId: row.recipient_id,
+        phone: r.phone,
+        params: r.params,
+      };
     }
   );
 
   return {
+    accountId,
+    send_config_id: broadcast.send_config_id,
+    send_generation: broadcast.send_generation,
     broadcastId,
     templateName,
     templateLanguage: resolvedTemplate.language,
@@ -267,55 +308,61 @@ export async function deliverBroadcast(
   db: SupabaseClient,
   plan: BroadcastPlan
 ): Promise<void> {
-  for (const recipient of plan.planned) {
-    const variants = phoneVariants(recipient.phone);
-    let sentMessageId: string | null = null;
-    let lastError: string | null = null;
+  return withStoredSendConnection(plan.accountId, plan, async () => {
+    for (const recipient of plan.planned) {
+      const variants = phoneVariants(recipient.phone);
+      let sentMessageId: string | null = null;
+      let lastError: string | null = null;
 
-    for (const variant of variants) {
-      try {
-        const result = await sendTemplateMessage({
-          phoneNumberId: plan.phoneNumberId,
-          accessToken: plan.accessToken,
-          to: variant,
-          templateName: plan.templateName,
-          language: plan.templateLanguage,
-          template: plan.templateRow ?? undefined,
-          params: recipient.params,
-        });
-        sentMessageId = result.messageId;
-        lastError = null;
-        break;
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Unknown error';
-        lastError = message;
-        // Only a "recipient not allowed" error is worth another variant.
-        if (!isRecipientNotAllowedError(message)) break;
+      for (const variant of variants) {
+        try {
+          const result = await sendTemplateMessage({
+            phoneNumberId: plan.phoneNumberId,
+            accessToken: plan.accessToken,
+            to: variant,
+            templateName: plan.templateName,
+            language: plan.templateLanguage,
+            template: plan.templateRow ?? undefined,
+            params: recipient.params,
+          });
+
+          sentMessageId = result.messageId;
+          lastError = null;
+          break;
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : 'Unknown error';
+
+          lastError = message;
+
+          // Only a "recipient not allowed" error is worth another variant.
+          if (!isRecipientNotAllowedError(message)) break;
+        }
+      }
+
+      if (sentMessageId) {
+        await db
+          .from('broadcast_recipients')
+          .update({
+            status: 'sent',
+            sent_at: new Date().toISOString(),
+            whatsapp_message_id: sentMessageId,
+            error_message: null,
+          })
+          .eq('id', recipient.recipientRowId);
+      } else {
+        await db
+          .from('broadcast_recipients')
+          .update({
+            status: 'failed',
+            error_message: lastError || 'Unknown error',
+          })
+          .eq('id', recipient.recipientRowId);
       }
     }
 
-    if (sentMessageId) {
-      await db
-        .from('broadcast_recipients')
-        .update({
-          status: 'sent',
-          sent_at: new Date().toISOString(),
-          whatsapp_message_id: sentMessageId,
-          error_message: null,
-        })
-        .eq('id', recipient.recipientRowId);
-    } else {
-      await db
-        .from('broadcast_recipients')
-        .update({
-          status: 'failed',
-          error_message: lastError || 'Unknown error',
-        })
-        .eq('id', recipient.recipientRowId);
-    }
-  }
-
-  await finalizeBroadcastStatus(db, plan.broadcastId);
+    await finalizeBroadcastStatus(db, plan.broadcastId);
+  });
 }
 
 /**
@@ -341,6 +388,7 @@ export async function finalizeBroadcastStatus(
       .select('id', { count: 'exact', head: true })
       .eq('broadcast_id', broadcastId)
       .eq('status', status);
+
     return count ?? 0;
   };
 
@@ -349,6 +397,7 @@ export async function finalizeBroadcastStatus(
   if ((await countWhere('pending')) > 0) return;
 
   const failed = await countWhere('failed');
+
   const { count: total } = await db
     .from('broadcast_recipients')
     .select('id', { count: 'exact', head: true })

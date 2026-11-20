@@ -19,8 +19,7 @@
       }
     ],
     "paths": {
-      "@/*": ["./src/*"],
-      "@app-messages": ["./messages/en.json"]
+      "@/*": ["./src/*"]
     }
   },
   "include": [
@@ -31,5 +30,5 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules"]
+  "exclude": ["node_modules", "tools/oxlint/anti-slop", "mcp-server"]
 }

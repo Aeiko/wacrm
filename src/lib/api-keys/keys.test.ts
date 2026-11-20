@@ -23,6 +23,7 @@ describe('generateApiKey', () => {
 
   it('never repeats a key (entropy sanity check)', () => {
     const seen = new Set<string>();
+
     for (let i = 0; i < 200; i++) seen.add(generateApiKey().plaintext);
     expect(seen.size).toBe(200);
   });

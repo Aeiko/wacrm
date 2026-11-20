@@ -1,7 +1,9 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   createBroadcast,
+  deliverBroadcast,
+  type BroadcastPlan,
   finalizeBroadcastStatus,
   BroadcastError,
 } from './broadcast-core';
@@ -11,6 +13,7 @@ import {
 vi.mock('@/lib/whatsapp/encryption', () => ({
   decrypt: () => 'plain-access-token',
 }));
+
 vi.mock('@/lib/api/v1/contacts', () => ({
   findOrCreateContact: vi.fn(async () => ({ id: 'c1' })),
 }));
@@ -42,6 +45,7 @@ describe('createBroadcast validation', () => {
     const recipients = Array.from({ length: 1001 }, () => ({
       to: '+14155550123',
     }));
+
     await expect(
       createBroadcast(db, 'acc', 'user', { templateName: 'promo', recipients })
     ).rejects.toMatchObject({ status: 400 });
@@ -51,13 +55,22 @@ describe('createBroadcast validation', () => {
 // Build a Supabase-shaped mock that gets createBroadcast past its config +
 // template lookups and into persistence. `rpcResult` is what the atomic
 // create_broadcast_with_recipients RPC returns.
-function makeDb(rpcResult: { data: unknown; error: unknown }) {
+const STORED_EPOCH = { send_config_id: 'config-1', send_generation: 'epoch-1' };
+
+function makeDb(
+  rpcResult: { data: unknown; error: unknown },
+  stored: {
+    send_config_id: string | null;
+    send_generation: string | null;
+  } | null = STORED_EPOCH
+) {
   const calls = {
     rpc: [] as { name: string; args: unknown }[],
     // Incremented if the OLD non-atomic path (a direct broadcasts /
     // broadcast_recipients insert) is ever reached — it must not be.
     usedDirectInsert: 0,
   };
+
   const database = {
     from(table: string) {
       if (table === 'whatsapp_config') {
@@ -73,16 +86,30 @@ function makeDb(rpcResult: { data: unknown; error: unknown }) {
           }),
         };
       }
+
       if (table === 'message_templates') {
         const chain: Record<string, unknown> = {
           select: () => chain,
           eq: () => chain,
           maybeSingle: () => Promise.resolve({ data: null, error: null }),
         };
+
         return chain;
       }
-      if (table === 'broadcasts' || table === 'broadcast_recipients') {
+
+      if (table === 'broadcasts') {
+        const chain = {
+          select: () => chain,
+          eq: () => chain,
+          single: async () => ({ data: stored, error: null }),
+        };
+
+        return chain;
+      }
+
+      if (table === 'broadcast_recipients') {
         calls.usedDirectInsert++;
+
         return {
           insert: () => ({
             select: () => ({
@@ -92,13 +119,16 @@ function makeDb(rpcResult: { data: unknown; error: unknown }) {
           }),
         };
       }
+
       throw new Error(`unexpected table: ${table}`);
     },
     rpc(name: string, args: unknown) {
       calls.rpc.push({ name, args });
+
       return Promise.resolve(rpcResult);
     },
   } as unknown as SupabaseClient;
+
   return { db: database, calls };
 }
 
@@ -158,6 +188,47 @@ describe('createBroadcast recipient validation (#586)', () => {
   });
 });
 
+describe('createBroadcast persisted connection', () => {
+  it.each([STORED_EPOCH, { send_config_id: null, send_generation: null }])(
+    'copies the database-stamped identity, including legacy NULLs: %j',
+    async (stored) => {
+      const { db } = makeDb(
+        {
+          data: [
+            { broadcast_id: 'b-1', recipient_id: 'r-1', contact_id: 'c1' },
+          ],
+          error: null,
+        },
+        stored
+      );
+
+      const plan = await createBroadcast(db, 'acc', 'user', {
+        templateName: 'promo',
+        recipients: [{ to: '+14155550123' }],
+      });
+
+      expect(plan).toMatchObject({ accountId: 'acc', ...stored });
+    }
+  );
+
+  it('does not return a send plan when the persisted parent cannot be loaded', async () => {
+    const { db } = makeDb(
+      {
+        data: [{ broadcast_id: 'b-1', recipient_id: 'r-1', contact_id: 'c1' }],
+        error: null,
+      },
+      null
+    );
+
+    await expect(
+      createBroadcast(db, 'acc', 'user', {
+        templateName: 'promo',
+        recipients: [{ to: '+14155550123' }],
+      })
+    ).rejects.toMatchObject({ code: 'internal', status: 500 });
+  });
+});
+
 describe('createBroadcast atomicity (#370)', () => {
   it('creates parent + recipients through the atomic RPC, never a bare parent insert', async () => {
     const { db, calls } = makeDb({
@@ -194,6 +265,7 @@ describe('createBroadcast atomicity (#370)', () => {
       p_contact_ids: string[];
       p_template_params: unknown;
     };
+
     expect(args.p_contact_ids).toEqual(['c1']);
     expect(args.p_template_params).toEqual([['Ann']]);
   });
@@ -229,19 +301,22 @@ describe('createBroadcast atomicity (#370)', () => {
 function statusDb(
   counts: Record<string, number>,
   total: number,
-  writes: { update?: Record<string, unknown> },
+  writes: { update?: Record<string, unknown> }
 ) {
   return {
     from(table: string) {
       let status: string | null = null;
+
       const b: Record<string, unknown> = {
         select: () => b,
         eq: (col: string, val: unknown) => {
           if (col === 'status') status = val as string;
+
           return b;
         },
         update: (row: Record<string, unknown>) => {
           if (table === 'broadcasts') writes.update = row;
+
           return b;
         },
         then: (resolve: (r: { count: number; error: null }) => unknown) =>
@@ -250,15 +325,142 @@ function statusDb(
             error: null,
           }),
       };
+
       return b;
     },
   } as unknown as SupabaseClient;
 }
 
+describe('deliverBroadcast persisted connection', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it.each([
+    {
+      stored: STORED_EPOCH,
+      generation: 'epoch-1',
+      app: 'app-1',
+      account: 'acc',
+      rotateAfterFirst: true,
+      expected: 1,
+    },
+    {
+      stored: STORED_EPOCH,
+      generation: 'epoch-1',
+      app: 'app-1',
+      account: 'acc',
+      expected: 2,
+    },
+    {
+      stored: STORED_EPOCH,
+      generation: 'epoch-2',
+      app: 'app-1',
+      account: 'acc',
+      expected: 0,
+    },
+    {
+      stored: STORED_EPOCH,
+      generation: 'epoch-1',
+      app: null,
+      account: 'acc',
+      expected: 0,
+    },
+    {
+      stored: STORED_EPOCH,
+      generation: 'epoch-1',
+      app: 'app-1',
+      account: 'other',
+      expected: 0,
+    },
+    {
+      stored: { send_config_id: null, send_generation: null },
+      generation: 'epoch-1',
+      app: 'app-1',
+      account: 'acc',
+      expected: 0,
+    },
+    {
+      stored: { send_config_id: null, send_generation: null },
+      generation: 'epoch-1',
+      app: null,
+      account: 'acc',
+      expected: 2,
+    },
+  ])(
+    'uses the original epoch for every recipient: %j',
+    async ({
+      stored,
+      generation,
+      app,
+      account,
+      expected,
+      rotateAfterFirst,
+    }) => {
+      vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'http://127.0.0.1:54321');
+      vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'fixture-service-key');
+      vi.stubEnv('WHATSAPP_COEXISTENCE_ENABLED', 'true');
+      vi.stubEnv('WHATSAPP_COEXISTENCE_APP_ID', 'app-1');
+      vi.stubEnv('WHATSAPP_COEXISTENCE_APP_SECRET', 'fixture-app-secret');
+      vi.stubEnv('WHATSAPP_COEXISTENCE_PARTNER_BUSINESS_ID', '123456789');
+      let posts = 0;
+      vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
+        const url = new URL(String(input));
+
+        if (url.pathname === '/rest/v1/whatsapp_config') {
+          expect(url.searchParams.get('phone_number_id')).toBe('eq.pn-1');
+
+          return Response.json([
+            {
+              id: 'config-1',
+              account_id: account,
+              access_token: 'enc',
+              status: 'connected',
+              coexistence_app_id: app,
+              coexistence_generation:
+                rotateAfterFirst && posts > 0 ? 'epoch-2' : generation,
+              coexistence_verified_at: '2026-01-01T00:00:00Z',
+            },
+          ]);
+        }
+
+        if (url.hostname !== 'graph.facebook.com')
+          throw new Error('Unexpected fixture request');
+        posts++;
+
+        return Response.json({ messages: [{ id: `wamid.${posts}` }] });
+      });
+
+      const plan: BroadcastPlan = {
+        accountId: 'acc',
+        ...stored,
+        broadcastId: 'b-1',
+        templateName: 'promo',
+        templateLanguage: 'en_US',
+        templateRow: null,
+        phoneNumberId: 'pn-1',
+        accessToken: 'plain-access-token',
+        rejected: 0,
+        planned: [
+          { recipientRowId: 'r-1', phone: '14155550123', params: [] },
+          { recipientRowId: 'r-2', phone: '14155550124', params: [] },
+        ],
+      };
+
+      await deliverBroadcast(statusDb({ pending: 0 }, 2, {}), plan);
+      expect(posts).toBe(expected);
+    }
+  );
+});
+
 describe('finalizeBroadcastStatus', () => {
   it('leaves a capped pass in "sending" while recipients are still pending', async () => {
     const writes: { update?: Record<string, unknown> } = {};
-    await finalizeBroadcastStatus(statusDb({ pending: 25 }, 1025, writes), 'b-1');
+    await finalizeBroadcastStatus(
+      statusDb({ pending: 25 }, 1025, writes),
+      'b-1'
+    );
     // No write at all — the UI keeps offering Resume.
     expect(writes.update).toBeUndefined();
   });
@@ -267,7 +469,7 @@ describe('finalizeBroadcastStatus', () => {
     const writes: { update?: Record<string, unknown> } = {};
     await finalizeBroadcastStatus(
       statusDb({ pending: 0, failed: 10 }, 10, writes),
-      'b-1',
+      'b-1'
     );
     expect(writes.update?.status).toBe('failed');
   });
@@ -276,7 +478,7 @@ describe('finalizeBroadcastStatus', () => {
     const writes: { update?: Record<string, unknown> } = {};
     await finalizeBroadcastStatus(
       statusDb({ pending: 0, failed: 3 }, 10, writes),
-      'b-1',
+      'b-1'
     );
     // 7 people got the message; failed_count carries the other 3.
     expect(writes.update?.status).toBe('sent');
@@ -288,7 +490,7 @@ describe('finalizeBroadcastStatus', () => {
     // failed. Pre-fix this wrote 'failed' off a pass-local counter.
     await finalizeBroadcastStatus(
       statusDb({ pending: 0, failed: 200 }, 1000, writes),
-      'b-1',
+      'b-1'
     );
     expect(writes.update?.status).toBe('sent');
   });

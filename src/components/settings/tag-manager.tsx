@@ -24,7 +24,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
-import { useTranslations } from 'next-intl';
+import { useTranslations } from 'use-intl';
 import type { Tag } from '@/types';
 
 const PRESET_COLORS = [
@@ -44,11 +44,17 @@ const PRESET_COLORS = [
  * dialog since it detaches the tag from every contact.
  */
 export function TagManager() {
+  const { user, accountId } = useAuth();
+
+  return <AccountTagManager key={`${user?.id}:${accountId}`} />;
+}
+
+function AccountTagManager() {
   const t = useTranslations('Settings.tagsAndFields');
   const supabase = createClient();
   const { user, accountId, loading: authLoading } = useAuth();
 
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(Boolean(user && accountId));
   const [tags, setTags] = useState<Tag[]>([]);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [tagToDelete, setTagToDelete] = useState<Tag | null>(null);
@@ -58,14 +64,25 @@ export function TagManager() {
   const [selectedColor, setSelectedColor] = useState(PRESET_COLORS[3].value);
 
   useEffect(() => {
-    if (authLoading) return;
-    if (!user || !accountId) {
-      setLoading(false);
-      return;
-    }
-    fetchTags(accountId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authLoading, user?.id, accountId]);
+    if (authLoading || !user || !accountId) return;
+    let ignore = false;
+    fetchAccountTags(supabase, accountId)
+      .then((items) => {
+        if (!ignore) setTags(items);
+      })
+      .catch((err) => {
+        if (ignore) return;
+        console.error('Failed to fetch tags:', err);
+        toast.error(t('failedToLoadTags'));
+      })
+      .finally(() => {
+        if (!ignore) setLoading(false);
+      });
+
+    return () => {
+      ignore = true;
+    };
+  }, [authLoading, user, accountId, supabase, t]);
 
   async function fetchTags(acctId: string) {
     try {
@@ -82,13 +99,16 @@ export function TagManager() {
   async function handleCreate() {
     if (!newTagName.trim()) {
       toast.error(t('nameRequired'));
+
       return;
     }
 
     try {
       setSaving(true);
+
       if (!user || !accountId) {
         toast.error(t('notAuthenticated'));
+
         return;
       }
 
@@ -125,6 +145,7 @@ export function TagManager() {
 
     try {
       setDeleting(true);
+
       const { error } = await supabase
         .from('tags')
         .delete()
@@ -147,8 +168,8 @@ export function TagManager() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-foreground">
-          <TagIcon className="size-4 text-primary" />
+        <CardTitle className="text-foreground flex items-center gap-2">
+          <TagIcon className="text-primary size-4" />
           {t('tagsTitle')}
         </CardTitle>
         <CardDescription className="text-muted-foreground">
@@ -156,9 +177,9 @@ export function TagManager() {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        {loading ? (
+        {authLoading || loading ? (
           <div className="flex items-center justify-center py-8">
-            <Loader2 className="size-6 animate-spin text-primary" />
+            <Loader2 className="text-primary size-6 animate-spin" />
           </div>
         ) : (
           <>
@@ -191,9 +212,7 @@ export function TagManager() {
                 ))}
               </div>
             ) : (
-              <p className="text-sm text-muted-foreground">
-                {t('noTags')}
-              </p>
+              <p className="text-muted-foreground text-sm">{t('noTags')}</p>
             )}
 
             {/* Inline create row */}
@@ -215,12 +234,16 @@ export function TagManager() {
                     key={color.value}
                     type="button"
                     onClick={() => setSelectedColor(color.value)}
-                    aria-label={t('useColor', { color: t(`colors.${color.name}` as Parameters<typeof t>[0]) })}
+                    aria-label={t('useColor', {
+                      color: t(
+                        `colors.${color.name}` as Parameters<typeof t>[0]
+                      ),
+                    })}
                     aria-pressed={selectedColor === color.value}
                     className={cn(
                       'size-6 rounded-md transition-transform hover:scale-110',
                       selectedColor === color.value &&
-                        'outline outline-2 outline-offset-2 outline-primary',
+                        'outline-primary outline outline-2 outline-offset-2'
                     )}
                     style={{ backgroundColor: color.value }}
                     title={t(`colors.${color.name}` as Parameters<typeof t>[0])}
@@ -251,7 +274,9 @@ export function TagManager() {
           <DialogHeader>
             <DialogTitle>{t('deleteTag')}</DialogTitle>
             <DialogDescription>
-              {tagToDelete ? t('deleteConfirm', { name: tagToDelete.name }) : null}
+              {tagToDelete
+                ? t('deleteConfirm', { name: tagToDelete.name })
+                : null}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

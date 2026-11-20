@@ -57,6 +57,7 @@ export function registerBroadcastTools(server: McpServer, client: WacrmClient): 
             'with the user, then call again with confirm=true.',
         );
       }
+
       return jsonResult(await client.sendBroadcast(body));
     }),
   );

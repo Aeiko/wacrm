@@ -69,6 +69,7 @@ export function badRequest(message: string): ApiError {
 /** 429 — built from a `checkRateLimit` miss, with the standard headers. */
 export function rateLimited(result: RateLimitResult): ApiError {
   const retryAfter = Math.max(1, Math.ceil((result.reset - Date.now()) / 1000));
+
   return new ApiError(
     'rate_limited',
     'Rate limit exceeded for this API key',
@@ -126,7 +127,9 @@ export function toApiErrorResponse(err: unknown): NextResponse {
       { status: err.status, headers: err.headers }
     );
   }
+
   console.error('[api/v1] uncategorized error:', err);
+
   return NextResponse.json(
     { error: { code: 'internal', message: 'Internal server error' } },
     { status: 500 }

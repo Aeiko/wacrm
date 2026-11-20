@@ -18,7 +18,8 @@ export type DeliveryLeaseResult =
 
 type Sleep = (ms: number) => Promise<unknown>;
 
-const defaultSleep: Sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const defaultSleep: Sleep = (ms) =>
+  new Promise((resolve) => setTimeout(resolve, ms));
 
 async function callLeaseRpc(
   db: SupabaseClient,
@@ -27,22 +28,27 @@ async function callLeaseRpc(
   sleep: Sleep
 ): Promise<DeliveryLeaseResult> {
   let lastError = '';
+
   for (let attempt = 1; attempt <= LEASE_RPC_ATTEMPTS; attempt++) {
     try {
       const { data, error } = await db.rpc(fn, args);
+
       if (!error) {
         return typeof data === 'string' && data
           ? { status: 'held', lease: data }
           : { status: 'lost' };
       }
+
       lastError = error.message;
     } catch (err) {
       lastError = err instanceof Error ? err.message : String(err);
     }
+
     if (attempt < LEASE_RPC_ATTEMPTS) {
       await sleep(LEASE_RPC_BACKOFF_MS * 2 ** (attempt - 1));
     }
   }
+
   return { status: 'error', message: lastError };
 }
 
@@ -80,6 +86,8 @@ export async function isBroadcastDeliveryInFlight(
   const { data, error } = await db.rpc('broadcast_delivery_in_flight', {
     p_broadcast_id: broadcastId,
   });
+
   if (error) return false;
+
   return data === true;
 }

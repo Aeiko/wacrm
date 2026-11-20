@@ -35,6 +35,7 @@ export async function DELETE(
       `admin:apiKeyRevoke:${ctx.userId}`,
       RATE_LIMITS.adminAction
     );
+
     if (!limit.success) return rateLimitResponse(limit);
 
     const { id } = await params;
@@ -54,11 +55,13 @@ export async function DELETE(
 
     if (error) {
       console.error('[DELETE /api/account/api-keys/[id]] error:', error);
+
       return NextResponse.json(
         { error: t('account.apiKeys.revokeFailed') },
         { status: 500 }
       );
     }
+
     if (!data) {
       // Either no such key in this account, or it was already revoked.
       return NextResponse.json(

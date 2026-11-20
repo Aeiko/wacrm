@@ -3,6 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   runAutomationsForTrigger,
   type AutomationContext,
+  type AutomationOutcome,
 } from '@/lib/automations/engine';
 import { addContactTagIfAbsent } from './tag-write';
 import { MAX_TAG_CHAIN_DEPTH, getTagChainDepth } from './tag-chain';
@@ -20,6 +21,8 @@ interface AddContactTagAndDispatchInput {
 export interface AddContactTagResult {
   added: boolean;
   dispatched: boolean;
+  /** Nested dispatch finished or skipped; ambiguous attempts must not be retried. */
+  status: AutomationOutcome;
   reason?: 'duplicate' | 'max_depth';
 }
 
@@ -36,9 +39,17 @@ export async function addContactTagAndDispatch(
     tagId: input.tagId,
   });
 
-  if (!added) return { added: false, dispatched: false, reason: 'duplicate' };
+  if (!added) {
+    return {
+      added: false,
+      dispatched: false,
+      status: 'completed',
+      reason: 'duplicate',
+    };
+  }
 
   const depth = getTagChainDepth(input.context);
+
   if (depth >= MAX_TAG_CHAIN_DEPTH) {
     console.warn('[automations] tag_added chain depth limit reached', {
       accountId: input.accountId,
@@ -46,10 +57,16 @@ export async function addContactTagAndDispatch(
       tagId: input.tagId,
       depth,
     });
-    return { added: true, dispatched: false, reason: 'max_depth' };
+
+    return {
+      added: true,
+      dispatched: false,
+      status: 'completed',
+      reason: 'max_depth',
+    };
   }
 
-  await runAutomationsForTrigger({
+  const status = await runAutomationsForTrigger({
     accountId: input.accountId,
     triggerType: 'tag_added',
     contactId: input.contactId,
@@ -57,11 +74,11 @@ export async function addContactTagAndDispatch(
       ...input.context,
       tag_id: input.tagId,
       vars: {
-        ...(input.context?.vars ?? {}),
+        ...input.context?.vars,
         _tag_chain_depth: depth + 1,
       },
     },
   });
 
-  return { added: true, dispatched: true };
+  return { added: true, dispatched: true, status };
 }
