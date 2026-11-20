@@ -22,16 +22,21 @@ const exchange = '/auth/v1/token?grant_type=pkce';
 const addr={ auth:'127.0.0.4', rest:'127.0.0.4', proxy:'127.0.0.2', listen:'127.0.0.1', crmIP:'127.0.0.3' };
 
 let gatewayPort;
+
 function call(path, { method='GET', host=api, headers={}, body, source=addr.proxy }={}){
   return new Promise((resolve,reject)=>{
     const req=request({hostname:addr.listen,port:gatewayPort,path,method,localAddress:source,headers:{host,...headers}},r=>{
       const chunks=[];r.on('data',x=>chunks.push(x));r.on('end',()=>resolve({status:r.statusCode,headers:r.headers,body:Buffer.concat(chunks).toString()}));
-    });req.on('error',reject);req.end(body);
+    });
+
+req.on('error',reject);req.end(body);
   });
 }
+
 async function listen(port, host, handle){
   const server=createServer(handle);
   await new Promise((resolve,reject)=>server.once('error',reject).listen(port,host,resolve));
+
   return server;
 }
 
@@ -39,14 +44,19 @@ await test('registration is opt-in, email-only and bounded independently of logi
   const dir=mkdtempSync(join(tmpdir(),'wacrm-registration-gateway-'));
   mkdirSync(join(dir,'gateway'));writeFileSync(join(dir,'anon'),anon);
   const authCalls=[];
+
   const auth=await listen(0,addr.auth,async(req,res)=>{
-    const chunks=[];for await(const c of req)chunks.push(c);
+    const chunks=[];
+
+for await(const c of req)chunks.push(c);
     const raw=Buffer.concat(chunks).toString();
     authCalls.push({url:req.url,method:req.method,body:raw&&JSON.parse(raw)});
+
     if(req.url.startsWith('/verify?'))res.writeHead(303,{location:callback+'&code='+code});
     else res.writeHead(200);
     res.end();
   });
+
   const app=await listen(0,addr.crmIP,(req,res)=>res.end(req.url.split('?')[0]));
   const reservation=reservePort();
   await new Promise((resolve,reject)=>reservation.once('error',reject).listen(0,addr.listen,resolve));
@@ -56,15 +66,23 @@ await test('registration is opt-in, email-only and bounded independently of logi
   writeFileSync(join(dir,'gateway/upstreams.json'),JSON.stringify({...addr,fixturePorts}));
   const env={...process.env,LOGIN_GATEWAY_MODE:'private-http-fixture-v1',LOGIN_GATEWAY_FIXTURE_DIR:dir,LOGIN_CRM_HOST:crm,LOGIN_API_HOST:api};
   let child;
+
   async function start(enabled){
     child=spawn(process.execPath,[fileURLToPath(new URL('./login-gateway.mjs',import.meta.url))],{env:{...env,LOGIN_PUBLIC_EMAIL_REGISTRATION:enabled?'true':'false'},stdio:'ignore'});
+
     for(let i=0;i<50;i++){
       if(child.exitCode!==null)throw Error('gateway failed to start');
-      try{await call('/login',{host:crm});return;}catch{await delay(40);}
+
+      try{await call('/login',{host:crm});
+
+return;}catch{await delay(40);}
     }
+
     throw Error('gateway not ready');
   }
+
   async function stop(){if(child&&child.exitCode===null&&child.signalCode===null){const stopped=new Promise(r=>child.once('exit',r));child.kill();await stopped;}}
+
   try{
     await start(false);
     assert.equal((await call('/signup',{host:crm})).status,404);
@@ -77,8 +95,8 @@ await test('registration is opt-in, email-only and bounded independently of logi
     assert.equal((await call(signup,{method:'POST',headers:{...publicHeaders,origin:'https://wrong.fixture.invalid'}})).status,403);
     assert.equal((await call('/auth/v1/signup?redirect_to=https://wrong.fixture.invalid',{method:'POST',headers:publicHeaders})).status,404);
     const post=(p)=>call(signup,{method:'POST',headers:publicHeaders,body:JSON.stringify(p)});
-    assert.equal((await post({data:{role:'service_role'}})).status,400);
     const account={email:'owner@example.invalid',password:randomBytes(24).toString('base64url'),data:{full_name:'Fresh Owner'},code_challenge:'a'.repeat(43),code_challenge_method:'s256'};
+    assert.equal((await post({...account,code_challenge:[account.code_challenge]})).status,400);
     assert.equal((await post({...account,role:'service_role',phone:'123',data:{...account.data,account_role:'admin',account_id:code}})).status,200);
     assert.deepEqual(authCalls[0],{url:signup.slice(8),method:'POST',body:account});
     assert.equal((await call(signup,{method:'POST',headers:{...publicHeaders,'content-type':'text/plain'},body:JSON.stringify(account)})).status,415);
