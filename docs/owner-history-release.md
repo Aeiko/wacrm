@@ -7,3 +7,5 @@ The public CRM gateway admits exact `GET`/`POST` on `/history-permissions` and `
 3. In the original owner session, inspect the request, verify the phone suffix and deadline, and explicitly confirm once. SQL081 must acknowledge the one-shot start before the app consumes the permit; a missing permit ACK or an invalid/expired receipt never authorizes a POST. The app does not retry the history POST or its start RPC. Read the fixed status for the outcome; normal SQL095 receiver and worker gates still apply.
 
 The legacy relay pins are not history credentials and their receive-only send guard is unchanged. There is no contacts grant, automatic history request, or change to email signup or member activation.
+
+Disposable SQL regression: `python -B supabase/ci/verify-coexistence-member-activation.py --baseline PATH_TO_REVIEWED_SQL074.sql`. It checks the SQL093 → SQL096 binding, consent without review, wrong owner/session, stale generation, expiry, one-shot start, and SQL095 intake. It does not replace the joined browser and permit-socket check.

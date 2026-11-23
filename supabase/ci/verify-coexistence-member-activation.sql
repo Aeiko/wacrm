@@ -2,6 +2,7 @@ DO $$
 DECLARE
   owner_id uuid:=gen_random_uuid(); member_id uuid:=gen_random_uuid(); stranger_id uuid:=gen_random_uuid();
   s uuid:=gen_random_uuid(); s2 uuid:=gen_random_uuid(); os uuid:=gen_random_uuid(); ss uuid:=gen_random_uuid();
+  os2 uuid:=gen_random_uuid();
   a uuid; b uuid; op uuid; cfg whatsapp_config%ROWTYPE; old_rev uuid; r jsonb;
   inbox_payload jsonb:='{"deliveries":[{"field":"messages"}]}';
   lease record; stopped_lease record; conv uuid:=gen_random_uuid();
@@ -16,7 +17,7 @@ DECLARE
 BEGIN
   INSERT INTO auth.users(id,email,email_confirmed_at,raw_user_meta_data)
     SELECT id,id||'@activation.invalid',now(),'{}' FROM unnest(ARRAY[owner_id,member_id,stranger_id]) id;
-  INSERT INTO auth.sessions(id,user_id) VALUES(s,member_id),(s2,member_id),(os,owner_id),(ss,stranger_id);
+  INSERT INTO auth.sessions(id,user_id) VALUES(s,member_id),(s2,member_id),(os,owner_id),(os2,owner_id),(ss,stranger_id);
   SELECT account_id INTO STRICT a FROM profiles WHERE user_id=owner_id;
   SELECT account_id INTO STRICT b FROM profiles WHERE user_id=stranger_id;
   UPDATE profiles SET account_id=a,account_role='viewer' WHERE user_id=member_id;
@@ -152,11 +153,42 @@ BEGIN
   ASSERT wacrm_pilot_worker.coexistence_commit(lease.id,lease.lease_token,jsonb_build_array(projected))='completed';
   SELECT conversation_id INTO STRICT inbox FROM messages WHERE message_id='fixture-live';
   INSERT INTO wacrm_history_worker.selection VALUES(true,cfg.id);
-  PERFORM coexistence_import_consent(owner_id,a,os,cfg.id,cfg.coexistence_generation,'611','620','630',decision,true,false);
-  SELECT t.context INTO context FROM coexistence_import_settings_snapshot(owner_id,a,os,'611','620','630') t;
+  ASSERT NOT has_function_privilege('authenticated','public.coexistence_owner_history(uuid,uuid,text,text,uuid,uuid,boolean)','EXECUTE');
+  ASSERT NOT has_function_privilege('anon','public.coexistence_owner_history(uuid,uuid,text,text,uuid,uuid,boolean)','EXECUTE');
+  SET LOCAL ROLE service_role;
+  ASSERT coexistence_owner_history(member_id,s,'permissions')='{"status":"ok","connection":null}';
+  ASSERT coexistence_owner_history(stranger_id,ss,'permissions')='{"status":"ok","connection":null}';
+  r:=coexistence_owner_history(owner_id,os,'permissions');
+  ASSERT r->'connection' @> '{"can_grant":true,"history":false,"contacts":false,"phone_id_suffix":"630"}';
+  context:=r->'connection'->>'context';
+  ASSERT coexistence_owner_history(owner_id,os2,'consent',context,decision,NULL,true)='{"status":"conflict"}';
+  ASSERT coexistence_owner_history(owner_id,os,'consent',context,decision,NULL,true)
+    @> '{"status":"recorded","history":true,"contacts":false,"dispatch_authorized":false}';
+  ASSERT coexistence_owner_history(owner_id,os,'inspect')='{"state":"unavailable"}';
+  ASSERT coexistence_owner_history(owner_id,os,'start',context,history_request,decision)='{"dispatch":false}';
+  RESET ROLE;
   ASSERT wacrm_history_worker.review(owner_id,a,os,context,decision,history_request);
-  ASSERT coexistence_history_request_start(owner_id,os,'611','620','630',context,decision,history_request) @> '{"dispatch":true}';
-  ASSERT coexistence_history_request_start(owner_id,os,'611','620','630',context,decision,history_request) @> '{"dispatch":false}';
+  BEGIN
+    UPDATE auth.sessions SET not_after=clock_timestamp()-interval '1 second' WHERE id=os;
+    ASSERT coexistence_owner_history(owner_id,os,'start',context,history_request,decision)='{"dispatch":false}';
+    RAISE SQLSTATE 'P9001';
+  EXCEPTION WHEN SQLSTATE 'P9001' THEN NULL;
+  END;
+  BEGIN
+    UPDATE whatsapp_config SET verify_token='synthetic-rotation' WHERE id=cfg.id;
+    ASSERT (SELECT coexistence_generation FROM whatsapp_config WHERE id=cfg.id)<>cfg.coexistence_generation;
+    ASSERT coexistence_owner_history(owner_id,os,'start',context,history_request,decision)='{"dispatch":false}';
+    RAISE SQLSTATE 'P9001';
+  EXCEPTION WHEN SQLSTATE 'P9001' THEN NULL;
+  END;
+  SET LOCAL ROLE service_role;
+  ASSERT coexistence_owner_history(owner_id,os,'inspect') @> '{"state":"ready"}';
+  ASSERT coexistence_owner_history(owner_id,os2,'start',context,history_request,decision)='{"dispatch":false}';
+  ASSERT coexistence_owner_history(stranger_id,ss,'start',context,history_request,decision)='{"dispatch":false}';
+  ASSERT coexistence_owner_history(owner_id,os,'start',repeat('0',64),history_request,decision)='{"dispatch":false}';
+  ASSERT coexistence_owner_history(owner_id,os,'start',context,history_request,decision) @> '{"dispatch":true,"phone_number_id":"630"}';
+  ASSERT coexistence_owner_history(owner_id,os,'start',context,history_request,decision)='{"dispatch":false}';
+  RESET ROLE;
   ASSERT (wacrm_managed_receiver.coexistence_ingress('611',NULL,true,true,jsonb_build_array(history_change))->>'status')::int=403;
   ASSERT coexistence_history_request_finish(history_request,'accepted');
   ASSERT (wacrm_managed_receiver.coexistence_ingress('611',NULL,true,true,jsonb_build_array(history_change))->>'status')::int=200;

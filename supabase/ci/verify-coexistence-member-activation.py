@@ -17,8 +17,9 @@ def main():
         assertions = [Path(__file__).with_name(f'verify-coexistence-member-{name}.sql').read_bytes()
                       for name in ('signup', 'activation')]
         lanes = [(migrations / name).read_bytes().removeprefix(b'BEGIN;').rstrip().removesuffix(b'COMMIT;')
-                 for name in ('094_coexistence_managed_binding.sql', '095_coexistence_history_worker.sql')]
-        sql(b'\n'.join([b'BEGIN;', activation, *lanes, *assertions, b'ROLLBACK;']), label='SQL093-095 assertions')
+                 for name in ('094_coexistence_managed_binding.sql', '095_coexistence_history_worker.sql',
+                              '096_coexistence_owner_history.sql')]
+        sql(b'\n'.join([b'BEGIN;', activation, *lanes, *assertions, b'ROLLBACK;']), label='SQL093-096 assertions')
 
         sql((ROOT.parent / 'deploy/member-runtime/install.sql').read_bytes(), label='Restricted runtime install')
         sql(b'BEGIN;\n' + activation + b'\nCOMMIT;', label='SQL093 restricted RPC upgrade')
@@ -33,7 +34,7 @@ def main():
           ASSERT member_signup_private.coexistence_member_signup(NULL,NULL,NULL,'activation_read',
             '{"app_id":"1","login_config_id":"2","partner_id":"3","state":"00000000-0000-4000-8000-000000000000","waba_id":"4","phone_number_id":"5"}')='{"status":"forbidden"}';
         END $$;""", user='member_signup_authenticator', label='SQL093 restricted RPC access assertions')
-        print('SQL090 regression, SQL093 activation, and SQL094-095 inbox, history, reply, and stop assertions passed.')
+        print('SQL090 regression, SQL093 activation, and SQL094-096 inbox, owner history, reply, and stop assertions passed.')
 
 
 if __name__ == '__main__':
