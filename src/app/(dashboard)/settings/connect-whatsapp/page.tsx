@@ -1,11 +1,14 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import { connection } from 'next/server';
 import { DiscoveryClient } from '@/components/settings/discovery-client';
 import { LaunchOnlyWhatsApp } from '@/components/settings/launch-only-whatsapp';
 import { createClient } from '@/lib/supabase/server';
 import { getCurrentAccount } from '@/lib/auth/account';
 
 export default async function ConnectWhatsAppPage() {
+  await connection();
+
   const preview = process.env.WHATSAPP_MEMBER_LAUNCH_PREVIEW === 'true';
   const appId = process.env.WHATSAPP_COEXISTENCE_APP_ID ?? '';
   const configId = process.env.WHATSAPP_COEXISTENCE_LOGIN_CONFIG_ID ?? '';
