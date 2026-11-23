@@ -353,37 +353,35 @@ describe('Managed owner history request', () => {
     };
   });
 
-  it.each([
-    [false, true],
-    [true, false],
-    [true, true],
-  ])(
-    'gates the entry by server enablement (%s) and managed mode (%s)',
-    async (historyRequestEnabled, managed) => {
-      const fetcher = vi.fn(async () =>
-        Response.json({ managed, operation_state: 'idle' })
-      );
+  it.each([false, true])(
+    'gates history-only permissions and requests by server enablement (%s)',
+    (historyRequestEnabled) => {
+      const child = readDraft(() => WhatsAppConfig({ historyRequestEnabled }));
+      expect(child.type).toBeTypeOf('function');
 
-      vi.stubGlobal('fetch', fetcher);
+      // SAFETY: the assertion above verifies that the wrapper is a function component.
+      const Settings = child.type as (
+        props: typeof child.props
+      ) => ReactElement;
 
-      const render = mountDraft(
-        () => WhatsAppConfig({ historyRequestEnabled }),
-        undefined,
-        true
-      );
+      const tree = readDraft(() => Settings(child.props));
 
-      render();
-      await vi.waitFor(() => {
-        const tree = render();
-        expect(() => control(tree, 'operator.modeLoading')).toThrow();
+      const requestPanel = () =>
+        find(tree, (node) => node.type === CoexistenceHistoryRequestPanel);
 
-        const panel = () =>
-          find(tree, (node) => node.type === CoexistenceHistoryRequestPanel);
+      const permissionsPanel = () =>
+        find(tree, (node) => node.type === CoexistenceImportPermissionsPanel);
 
-        if (managed && historyRequestEnabled) expect(panel()).toBeDefined();
-        else expect(panel).toThrow();
-      });
-      expect(fetcher).toHaveBeenCalledTimes(1);
+      if (historyRequestEnabled) {
+        expect(requestPanel()).toBeDefined();
+        expect(permissionsPanel()).toMatchObject({
+          props: { historyOnly: true },
+        });
+      } else {
+        expect(requestPanel).toThrow();
+        expect(permissionsPanel).toThrow();
+      }
+
       expect(
         CoexistenceHistoryRequestPanel({
           permissions: { revision: 0, saving: false },

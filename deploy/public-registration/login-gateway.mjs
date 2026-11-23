@@ -32,6 +32,7 @@ const upstreams={auth:{host:auth,port:fixture?(fixturePorts?.auth??19999):9999},
 const origin='https://'+crm;
 const apiOrigin='https://'+api;
 const member=process.env.LOGIN_MEMBER_SIGNUP_ENABLED==='true';
+const ownerHistory=process.env.LOGIN_HISTORY_REQUEST_ENABLED==='true';
 const registration=process.env.LOGIN_PUBLIC_EMAIL_REGISTRATION==='true';
 const callback=origin+'/auth/callback';
 const passwordPath='/signup/password';
@@ -260,6 +261,39 @@ return end(res,413);}
   return pass(req,res,upstreams.crm,req.url,keys,body,{memberRoute:true,timeout:post?48_000:12_000});
 }
 
+async function historyRequest(req,res,path,query){
+  const post=req.method==='POST', h=req.headers, d=req.headersDistinct;
+
+  if(!ownerHistory||query!==undefined||!['GET','POST'].includes(req.method))return end(res,404);
+
+  if(['authorization','apikey','x-api-key'].some(k=>d[k]))return end(res,401);
+
+  if((d.origin?.length??0)>1||(h.origin!==undefined&&h.origin!==origin)||(post&&h.origin!==origin))return end(res,403);
+
+  if(d['sec-fetch-site']&&(d['sec-fetch-site'].length!==1||h['sec-fetch-site']!=='same-origin'))return end(res,403);
+
+  if(!post&&(d['transfer-encoding']||Number(h['content-length']??0)!==0))return end(res,400);
+
+  const type=path==='/history-request'?/^application\/x-www-form-urlencoded(?:\s*;\s*charset=(?:utf-8|"utf-8"))?$/i:/^application\/json(?:\s*;\s*charset=(?:utf-8|"utf-8"))?$/i;
+
+  if(post&&(d['content-type']?.length!==1||!type.test(h['content-type'])||d['content-encoding']))return end(res,415);
+
+  if(post&&Number(h['content-length'])>1024)return end(res,413);
+  const bearer=cookieBearer(req);
+  const id=await session(bearer);
+
+  if(!id)return end(res,401);
+
+  if(!await membership(id,bearer,true))return end(res,403);
+  const body=post?await readBody(req,1024,true):undefined;
+
+  if(body===null){res.setHeader('Connection','close');
+
+return end(res,413);}
+
+  return pass(req,res,upstreams.crm,path,['host','cookie','origin','content-type','sec-fetch-site'],body,{timeout:18_000});
+}
+
 function signupBody(body){
   const p=JSON.parse(body);
 
@@ -452,6 +486,8 @@ if(bytes>26000)return end(res,413);chunks.push(chunk);}
 
         return pass(req,res,upstreams.crm,'/api/whatsapp/reply',['host','cookie','origin','content-type','idempotency-key'],Buffer.concat(chunks));
       }
+
+      if(path==='/history-request'||path==='/history-permissions')return await historyRequest(req,res,path,query);
 
       if(path==='/settings/connect-whatsapp'||path==='/supervised-discovery')return await memberRequest(req,res,path,query);
       const settings=path==='/settings';

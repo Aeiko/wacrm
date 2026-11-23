@@ -1,0 +1,9 @@
+# Owner history request (SQL096)
+
+The public CRM gateway admits exact `GET`/`POST` on `/history-permissions` and `/history-request` only with `LOGIN_HISTORY_REQUEST_ENABLED=true`. The CRM separately requires `WHATSAPP_COEXISTENCE_ENABLED=true` and `WHATSAPP_COEXISTENCE_HISTORY_REQUEST_ENABLED=true`. Keep these off until the joined acceptance passes. The application checks the built canonical HTTPS `NEXT_PUBLIC_SITE_URL`; neither layer derives the owner or origin from forwarded headers. No other import, operator or config endpoint is opened.
+
+1. Apply SQL096 after SQL095 on the CRM database. In Settings → WhatsApp, the owner inspects permissions and explicitly saves history only. The active SQL093 account/config/generation and owner/session come from SQL, not the form. Nothing is dispatched at this step.
+2. Independently review that decision with the existing SQL095 operator-only `wacrm_history_worker.review`, and provision one expiring permit for the exact phone/request pair out of band. The CRM sees only the consume socket at `/run/wacrm-history-permit/consume.sock`; it cannot issue or reset permits. Do not mount the permit database in the CRM.
+3. In the original owner session, inspect the request, verify the phone suffix and deadline, and explicitly confirm once. SQL081 must acknowledge the one-shot start before the app consumes the permit; a missing permit ACK or an invalid/expired receipt never authorizes a POST. The app does not retry the history POST or its start RPC. Read the fixed status for the outcome; normal SQL095 receiver and worker gates still apply.
+
+The legacy relay pins are not history credentials and their receive-only send guard is unchanged. There is no contacts grant, automatic history request, or change to email signup or member activation.

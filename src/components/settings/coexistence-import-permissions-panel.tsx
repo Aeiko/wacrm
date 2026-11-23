@@ -29,10 +29,14 @@ type View =
   | { kind: 'recorded'; receipt: ImportSettingsReceipt }
   | { kind: 'uncertain'; intent: ImportSettingsRequest };
 
-type Props = { onSavingChange?: (saving: boolean) => void };
+type Props = {
+  historyOnly?: boolean;
+  onSavingChange?: (saving: boolean) => void;
+};
 
 export function CoexistenceImportPermissionsPanel({
   onSavingChange,
+  historyOnly,
 }: Props = {}) {
   const {
     user,
@@ -60,11 +64,12 @@ export function CoexistenceImportPermissionsPanel({
     <ImportPermissions
       key={`${user.id}:${accountId}`}
       onSavingChange={onSavingChange}
+      historyOnly={historyOnly}
     />
   );
 }
 
-function ImportPermissions({ onSavingChange }: Props) {
+function ImportPermissions({ onSavingChange, historyOnly }: Props) {
   const t = useTranslations('Settings.whatsapp.importPermissions');
   const format = useFormatter();
   const [view, setView] = useState<View>({ kind: 'closed' });
@@ -114,17 +119,20 @@ function ImportPermissions({ onSavingChange }: Props) {
     setExpiredContext(null);
 
     try {
-      const response = await fetch(route, {
-        credentials: 'same-origin',
-        cache: 'no-store',
-        redirect: 'error',
-        signal: controller.signal,
-        ...(intent && {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(intent),
-        }),
-      });
+      const response = await fetch(
+        historyOnly ? '/history-permissions' : route,
+        {
+          credentials: 'same-origin',
+          cache: 'no-store',
+          redirect: 'error',
+          signal: controller.signal,
+          ...(intent && {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(intent),
+          }),
+        }
+      );
 
       if (controller.signal.aborted) return;
 
@@ -158,7 +166,7 @@ function ImportPermissions({ onSavingChange }: Props) {
           if (Date.parse(inspected.expires_at) > Date.now()) {
             setDraft({
               history: inspected.history,
-              contacts: inspected.contacts,
+              contacts: !historyOnly && inspected.contacts,
             });
           } else {
             setExpiredContext(inspected.context);
@@ -307,17 +315,19 @@ function ImportPermissions({ onSavingChange }: Props) {
                     />
                     {t('history')}
                   </label>
-                  <label className="flex items-start gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      className="mt-1"
-                      checked={!locallyExpired && draft.contacts}
-                      onChange={(event) =>
-                        setDraft({ ...draft, contacts: event.target.checked })
-                      }
-                    />
-                    {t('contacts')}
-                  </label>
+                  {!historyOnly && (
+                    <label className="flex items-start gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        className="mt-1"
+                        checked={!locallyExpired && draft.contacts}
+                        onChange={(event) =>
+                          setDraft({ ...draft, contacts: event.target.checked })
+                        }
+                      />
+                      {t('contacts')}
+                    </label>
+                  )}
                   <Button
                     type="button"
                     disabled={!draft.history && !draft.contacts}

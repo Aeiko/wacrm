@@ -11,7 +11,6 @@ export async function consumeDispatchPermit(
   if (
     env.WHATSAPP_COEXISTENCE_ENABLED !== 'true' ||
     env.WHATSAPP_COEXISTENCE_HISTORY_REQUEST_ENABLED !== 'true' ||
-    phone !== env.WHATSAPP_COEXISTENCE_RELAY_PHONE_ID ||
     !/^[1-9][0-9]{0,31}$/.test(phone) ||
     !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(request) ||
     socketPath !== '/run/wacrm-history-permit/consume.sock'

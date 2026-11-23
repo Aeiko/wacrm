@@ -1,10 +1,11 @@
 import { z } from 'zod';
 import { checkRateLimit, getClientIp } from '@/lib/rate-limit';
-import { deadlineFetch, withRequestDeadline } from '@/lib/request-deadline';
+import { withRequestDeadline } from '@/lib/request-deadline';
 import {
-  connectionHeaders,
-  connectionServiceClient,
-} from '../connection-operation';
+  ownerHistoryClient,
+  isOwnerHistoryOrigin,
+} from './owner-history-client';
+import { connectionHeaders } from '../connection-operation';
 import {
   initiateCoexistenceSync,
   type CoexistenceFetch,
@@ -15,10 +16,6 @@ import { historyRequestStatusSchema } from './history-request-contract';
 import { readHistoryRequestOwner } from './history-request-owner';
 
 const resourceId = z.string().regex(/^[1-9][0-9]{0,31}$/);
-
-const pinsSchema = z
-  .tuple([resourceId, resourceId, resourceId])
-  .refine((ids) => new Set(ids).size === ids.length);
 
 const canonicalUuid = z.uuid().refine((id) => id.toLowerCase() === id);
 
@@ -102,25 +99,9 @@ export function historyRequestHandlers(transport: CoexistenceFetch) {
     )
       return respond(404);
 
-    const pins = pinsSchema.safeParse([
-      process.env.WHATSAPP_COEXISTENCE_APP_ID,
-      process.env.WHATSAPP_COEXISTENCE_RELAY_WABA_ID,
-      process.env.WHATSAPP_COEXISTENCE_RELAY_PHONE_ID,
-    ]);
+    if (new URL(request.url).search) return respond(400);
 
-    if (!pins.success) return respond(404);
-    const [app, waba, phone] = pins.data;
-    const url = new URL(request.url);
-    const site = request.headers.get('sec-fetch-site');
-
-    if (url.search) return respond(400);
-
-    if (
-      submitting &&
-      (request.headers.get('origin') !== url.origin ||
-        (site !== null && site !== 'same-origin'))
-    )
-      return respond(403);
+    if (submitting && !isOwnerHistoryOrigin(request)) return respond(403);
 
     const lane = submitting ? 'submit' : 'inspect';
     const windowMs = 60_000;
@@ -163,35 +144,8 @@ export function historyRequestHandlers(transport: CoexistenceFetch) {
           )
             return respond(429);
 
-          const db = connectionServiceClient((input, init) => {
-            const bytes = new TextEncoder().encode(
-              z.string().parse(init?.body)
-            );
-
-            // A non-replayable body also prevents Fetch's automatic HTTP 421 replay.
-            const options = {
-              ...init,
-              cache: 'no-store',
-              redirect: 'error',
-              duplex: 'half',
-              body: new ReadableStream<Uint8Array>({
-                start(controller) {
-                  controller.enqueue(bytes);
-                  controller.close();
-                },
-              }),
-            } satisfies RequestInit & { duplex: 'half' };
-
-            return deadlineFetch(input, options);
-          });
-
-          const args = {
-            p_actor_id: owner.actor,
-            p_session_id: owner.session,
-            p_app_id: app,
-            p_waba_id: waba,
-            p_phone_id: phone,
-          };
+          const db = ownerHistoryClient();
+          const args = { p_actor_id: owner.actor, p_session_id: owner.session };
 
           async function rpc<T>(
             name: string,
@@ -212,27 +166,27 @@ export function historyRequestHandlers(transport: CoexistenceFetch) {
 
           if (!command) {
             const status = await rpc(
-              'coexistence_history_request_status',
-              args,
+              'coexistence_owner_history',
+              { ...args, p_action: 'inspect' },
               historyRequestStatusSchema
             );
 
             signal.throwIfAborted();
 
-            if (status.state === 'ready') {
-              if (status.review.phone_id_suffix !== phone.slice(-4))
-                return respond(503);
-
-              if (!reviewExpiry(status.review.deadline_at)) return respond(200);
-            }
+            if (
+              status.state === 'ready' &&
+              !reviewExpiry(status.review.deadline_at)
+            )
+              return respond(200);
 
             return Response.json(status, { headers });
           }
 
           const start = await rpc(
-            'coexistence_history_request_start',
+            'coexistence_owner_history',
             {
               ...args,
+              p_action: 'start',
               p_context: command.context,
               p_decision_id: command.decision_id,
               p_request_id: command.request_id,
@@ -242,11 +196,7 @@ export function historyRequestHandlers(transport: CoexistenceFetch) {
 
           if (!start.dispatch) return respond(409);
 
-          if (
-            start.request_id !== command.request_id ||
-            start.phone_number_id !== phone
-          )
-            return respond(503);
+          if (start.request_id !== command.request_id) return respond(503);
 
           confirmedStart = true;
 
@@ -273,7 +223,7 @@ export function historyRequestHandlers(transport: CoexistenceFetch) {
             if (accessToken) {
               const result = await initiateCoexistenceSync(
                 {
-                  phoneNumberId: phone,
+                  phoneNumberId: start.phone_number_id,
                   accessToken,
                   syncType: 'history',
                   historyReceipt: receipt,

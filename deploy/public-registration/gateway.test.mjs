@@ -48,6 +48,8 @@ await test('registration is opt-in, email-only and bounded independently of logi
   const dir=mkdtempSync(join(tmpdir(),'wacrm-registration-gateway-'));
   mkdirSync(join(dir,'gateway'));writeFileSync(join(dir,'anon'),anon);
   const authCalls=[];
+  const historyCalls=[];
+  let accountRole='owner';
   const current={email_confirmed_at:null,app_metadata:{wacrm_email_first:true}};
   const exp=Math.floor(Date.now()/1000)+300;
   const jwt=method=>`Bearer e30.${Buffer.from(JSON.stringify({sub:code,role:'authenticated',aud:'authenticated',iss:`https://${api}/auth/v1`,exp,session_id:code,amr:[{method}]})).toString('base64url')}.fixture`;
@@ -65,6 +67,10 @@ for await(const c of req)chunks.push(c);
 
       return res.end(JSON.stringify(p_token===link.get('token')&&p_challenge===createHash('sha256').update(verifierValue).digest('base64url')));
     }
+
+    if(req.url.startsWith('/profiles?'))return res.end(JSON.stringify([{user_id:code,account_id:code,account_role:accountRole}]));
+
+    if(req.url.startsWith('/accounts?'))return res.end(JSON.stringify([{id:code,owner_user_id:code}]));
 
     authCalls.push({url:req.url,method:req.method,body:raw&&JSON.parse(raw),authorization:req.headers.authorization});
 
@@ -86,7 +92,17 @@ for await(const c of req)chunks.push(c);
     res.end();
   });
 
-  const app=await listen(0,addr.crmIP,(req,res)=>res.end(req.url.split('?')[0]));
+  const app=await listen(0,addr.crmIP,async(req,res)=>{
+    if(req.url.startsWith('/history-')){
+      const parts=[];
+
+      for await(const chunk of req)parts.push(chunk);
+      historyCalls.push({path:req.url,method:req.method,headers:req.headers,body:Buffer.concat(parts).toString()});
+    }
+
+    res.end(req.url.split('?')[0]);
+  });
+
   const reservation=reservePort();
   await new Promise((resolve,reject)=>reservation.once('error',reject).listen(0,addr.listen,resolve));
   gatewayPort=reservation.address().port;
@@ -97,7 +113,7 @@ for await(const c of req)chunks.push(c);
   let child;
 
   async function start(enabled){
-    child=spawn(process.execPath,[fileURLToPath(new URL('./login-gateway.mjs',import.meta.url))],{env:{...env,LOGIN_PUBLIC_EMAIL_REGISTRATION:enabled?'true':'false'},stdio:'ignore'});
+    child=spawn(process.execPath,[fileURLToPath(new URL('./login-gateway.mjs',import.meta.url))],{env:{...env,LOGIN_PUBLIC_EMAIL_REGISTRATION:enabled?'true':'false',LOGIN_HISTORY_REQUEST_ENABLED:enabled?'true':'false'},stdio:'ignore'});
 
     for(let i=0;i<50;i++){
       if(child.exitCode!==null)throw Error('gateway failed to start');
@@ -114,6 +130,8 @@ return;}catch{await delay(40);}
 
   try{
     await start(false);
+    assert.equal((await call('/history-request',{host:crm})).status,404);
+    assert.equal((await call('/history-permissions',{host:crm})).status,404);
     assert.equal((await call('/signup',{host:crm})).status,404);
     assert.equal((await call(signup,{method:'POST',headers:publicHeaders})).status,404);
     await stop();await start(true);
@@ -168,6 +186,34 @@ return;}catch{await delay(40);}
     assert.equal((await setPassword('email/signup',{password:account.password,code_challenge_method:'s256'})).status,400);
     assert.equal((await setPassword('email/signup',{password:account.password,code_challenge:null,code_challenge_method:null})).status,200);
     assert.deepEqual(authCalls.findLast(x=>x.method==='PUT').body,{password:account.password});
+
+    const cookie='sb-api-auth-token=base64-'+Buffer.from(JSON.stringify({access_token:jwt('password').slice(7)})).toString('base64url');
+    const history=(path,options={})=>call(path,{host:crm,...options,headers:{cookie,...options.headers}});
+    const contentType='application/x-www-form-urlencoded';
+    const body='confirmation=history-now-v1';
+    const postHistory=(headers,command=body)=>history('/history-request',{method:'POST',headers:{'content-type':contentType,...headers},body:command});
+
+    assert.equal((await call('/history-request',{host:crm})).status,401);
+    assert.equal((await history('/history-request',{host:api})).status,404);
+    assert.equal((await history('/history-request?')).status,404);
+    assert.equal((await history('/history-request/')).status,404);
+    assert.equal((await history('/history-request',{method:'HEAD'})).status,404);
+    assert.equal((await history('/history-permissions',{headers:{apikey:anon}})).status,401);
+    assert.equal((await postHistory({'x-forwarded-host':crm})).status,403);
+    assert.equal((await postHistory({origin,'sec-fetch-site':'cross-site'})).status,403);
+    assert.equal((await postHistory({origin,'content-type':'application/json'})).status,415);
+    assert.equal((await postHistory({origin},'a'.repeat(1025))).status,413);
+    accountRole='admin';
+    assert.equal((await history('/history-request')).status,403);
+    accountRole='owner';
+    assert.equal(historyCalls.length,0);
+    assert.equal((await history('/history-permissions')).status,200);
+    assert.equal((await history('/history-permissions',{method:'POST',headers:{origin,'content-type':'application/json'},body:'{}'})).status,200);
+    assert.equal((await postHistory({origin,'sec-fetch-site':'same-origin','x-forwarded-host':'wrong.invalid'})).status,200);
+    assert.deepEqual(historyCalls.map(c=>[c.path,c.method,c.body]),[
+      ['/history-permissions','GET',''],['/history-permissions','POST','{}'],['/history-request','POST',body],
+    ]);
+    assert.equal(historyCalls[2].headers['x-forwarded-host'],undefined);
     assert.equal((await setPassword('email/signup')).status,403);
     current.app_metadata={wacrm_email_first:true};
     const unrelated=Buffer.from(JSON.stringify({access_token:jwt('password').slice(7)})).toString('base64url');

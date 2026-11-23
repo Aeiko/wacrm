@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { connect } from 'node:net';
-import { expect, it, vi } from 'vitest';
+import { expect, it } from 'vitest';
 import { listenForFetch } from '@/test/http-server';
 import { createHistoryRequestTransport } from './history-request-transport';
 
@@ -21,8 +21,6 @@ it.each([200, 307, 421, 503, 'lost', 'oversize'] as const)(
       });
       res.end(reply === 'oversize' ? 'x'.repeat(65537) : '{}');
     });
-
-    vi.stubEnv('WHATSAPP_COEXISTENCE_RELAY_PHONE_ID', '123');
 
     try {
       const origin = await listenForFetch(server);
@@ -48,7 +46,7 @@ it.each([200, 307, 421, 503, 'lost', 'oversize'] as const)(
 
       const url = new URL('https://graph.facebook.com/v27.0/123/smb_app_data');
       await expect(
-        wire(new URL('/v27.0/124/smb_app_data', url), init)
+        wire(new URL('/v27.0/124/smb_app_data?unexpected=1', url), init)
       ).rejects.toThrow();
       await expect(
         wire(url, { ...init, body: '{"sync_type":"smb_app_state_sync"}' })
@@ -63,7 +61,6 @@ it.each([200, 307, 421, 503, 'lost', 'oversize'] as const)(
     } finally {
       server.closeAllConnections();
       server.close();
-      vi.unstubAllEnvs();
     }
   }
 );

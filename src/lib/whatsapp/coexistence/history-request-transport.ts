@@ -12,7 +12,7 @@ export function createHistoryRequestTransport(
   connect?: buildConnector.connector
 ): CoexistenceFetch {
   return async (url, init) => {
-    const phone = process.env.WHATSAPP_COEXISTENCE_RELAY_PHONE_ID;
+    const phone = url.pathname.split('/')[2];
     const authorization = new Headers(init.headers).get('authorization');
 
     if (

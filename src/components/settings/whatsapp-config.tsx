@@ -103,10 +103,29 @@ function WhatsAppSettings({
   const [recoveryRevision, setRecoveryRevision] = useState(0);
   const [connectionSettingsOpen, setConnectionSettingsOpen] = useState(true);
 
+  const [permissions, setPermissions] = useState({
+    revision: 0,
+    saving: false,
+  });
+
   return (
     <>
+      {historyRequestEnabled && connectionSettingsOpen && (
+        <>
+          <CoexistenceImportPermissionsPanel
+            historyOnly
+            onSavingChange={(saving) =>
+              setPermissions((current) => ({
+                revision: current.revision + (saving ? 1 : 0),
+                saving,
+              }))
+            }
+          />
+          <CoexistenceHistoryRequestPanel permissions={permissions} />
+        </>
+      )}
       <WhatsAppModeGate
-        historyRequestEnabled={historyRequestEnabled}
+        legacyPermissions={!historyRequestEnabled}
         open={connectionSettingsOpen}
         onOpen={() => setConnectionSettingsOpen(true)}
       />
@@ -124,9 +143,9 @@ function WhatsAppSettings({
 function WhatsAppModeGate({
   open,
   onOpen,
-  historyRequestEnabled,
+  legacyPermissions,
 }: {
-  historyRequestEnabled: boolean;
+  legacyPermissions: boolean;
   open: boolean;
   onOpen: () => void;
 }) {
@@ -142,22 +161,10 @@ function WhatsAppModeGate({
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
 
-  const [permissions, setPermissions] = useState({
-    revision: 0,
-    saving: false,
-  });
-
   const userId = user?.id;
 
-  const importPermissions = (
-    <CoexistenceImportPermissionsPanel
-      onSavingChange={(saving) =>
-        setPermissions((current) => ({
-          revision: current.revision + (saving ? 1 : 0),
-          saving,
-        }))
-      }
-    />
+  const importPermissions = legacyPermissions && (
+    <CoexistenceImportPermissionsPanel />
   );
 
   useEffect(() => {
@@ -256,9 +263,6 @@ function WhatsAppModeGate({
       <>
         <CoexistenceOperatorPanel />
         {importPermissions}
-        {historyRequestEnabled && (
-          <CoexistenceHistoryRequestPanel permissions={permissions} />
-        )}
       </>
     );
 

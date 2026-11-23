@@ -13,6 +13,10 @@ import type { CoexistenceFetch } from '@/lib/whatsapp/coexistence-meta';
 import { historyRequestHandlers } from '@/lib/whatsapp/coexistence/history-request-handler';
 import * as permit from '@/lib/whatsapp/coexistence/history-permit-client';
 import { encrypt } from '@/lib/whatsapp/encryption';
+import {
+  GET as readPermissions,
+  POST as writePermissions,
+} from '@/app/history-permissions/route';
 
 const origin = 'https://crm.example';
 const path = '/history-request';
@@ -43,11 +47,8 @@ const work = createWorkStore({
 
 const phone = '987654321';
 const context = 'a'.repeat(64);
-const app = '100000';
-const waba = '200000';
 const graphToken = 'fixture-graph-credential';
-const startPath = '/rest/v1/rpc/coexistence_history_request_start';
-const statusPath = '/rest/v1/rpc/coexistence_history_request_status';
+const ownerPath = '/rest/v1/rpc/coexistence_owner_history';
 const finishPath = '/rest/v1/rpc/coexistence_history_request_finish';
 const accessKey = 'fixture-anon-key';
 const serviceKey = 'fixture-service-key';
@@ -67,9 +68,15 @@ function fixtureToken(actor: string, session: string) {
   return `${jwt}.${createHmac('sha256', 'fixture-secret').update(jwt).digest('base64url')}`;
 }
 
-const rpcArgsSchema = z.record(z.string(), z.string());
+const rpcArgsSchema = z.record(
+  z.string(),
+  z.union([z.string(), z.boolean(), z.null()])
+);
 
-type FixtureJson = Record<string, string | boolean | Record<string, string>>;
+type FixtureJson = Record<
+  string,
+  string | boolean | null | Record<string, string>
+>;
 
 interface RpcFixture {
   status: FixtureJson;
@@ -145,11 +152,28 @@ async function fixture() {
     )
       return json({ message: 'fixture-auth-denied' }, 401);
 
-    if (req.url === statusPath) return json(state.status);
+    if (req.url === ownerPath && payload?.p_action === 'permissions')
+      return json({ status: 'ok', connection: null });
 
-    if (req.url === startPath) {
+    if (req.url === ownerPath && payload?.p_action === 'consent') {
+      const id = z.uuid().parse(payload.p_request_id);
+
+      return json({
+        status: 'recorded',
+        request_id: id,
+        contacts: false,
+        history: payload.p_history === true,
+        expires_at: deadline,
+        dispatch_authorized: false,
+      });
+    }
+
+    if (req.url === ownerPath && payload?.p_action === 'inspect')
+      return json(state.status);
+
+    if (req.url === ownerPath && payload?.p_action === 'start') {
       if (state.failStart === 307) {
-        res.writeHead(307, { Location: startPath });
+        res.writeHead(307, { Location: ownerPath });
         res.end();
 
         return;
@@ -170,7 +194,7 @@ async function fixture() {
     if (req.url === finishPath) {
       if (state.failFinish) return json(false);
 
-      if (payload?.p_outcome) state.status = { state: payload.p_outcome };
+      state.status = { state: z.string().parse(payload?.p_outcome) };
 
       return json(true);
     }
@@ -200,7 +224,11 @@ async function fixture() {
   const consume = vi
     .spyOn(permit, 'consumeDispatchPermit')
     .mockImplementation(async (candidatePhone, candidateRequest) => {
-      if (!available || candidatePhone !== phone || candidateRequest !== requestId)
+      if (
+        !available ||
+        candidatePhone !== phone ||
+        candidateRequest !== requestId
+      )
         return false;
 
       available = false;
@@ -208,7 +236,9 @@ async function fixture() {
       return true;
     });
 
-  onTestFinished(() => { consume.mockRestore(); });
+  onTestFinished(() => {
+    consume.mockRestore();
+  });
 
   function addPermit() {
     available = true;
@@ -238,6 +268,7 @@ async function fixture() {
       body?: string | ReadableStream;
       headers?: HeadersInit;
       search?: string;
+      permissions?: boolean;
       signal?: AbortSignal;
     } = {}
   ) {
@@ -251,13 +282,16 @@ async function fixture() {
     for (const [name, value] of new Headers(options.headers))
       headers.set(name, value);
 
-    const req = new NextRequest(`${origin}${path}${options.search ?? ''}`, {
-      method,
-      headers,
-      duplex: 'half',
-      signal: options.signal,
-      body: method === 'POST' ? (options.body ?? form) : undefined,
-    });
+    const req = new NextRequest(
+      `http://localhost:3000${options.permissions ? '/history-permissions' : path}${options.search ?? ''}`,
+      {
+        method,
+        headers,
+        duplex: 'half',
+        signal: options.signal,
+        body: method === 'POST' ? (options.body ?? form) : undefined,
+      }
+    );
 
     const store = createRequestStoreForAPI(
       req,
@@ -269,7 +303,11 @@ async function fixture() {
     );
 
     return workAsyncStorage.run(work, () =>
-      workUnitAsyncStorage.run(store, () => handlers[method](req))
+      workUnitAsyncStorage.run(store, () => {
+        if (!options.permissions) return handlers[method](req);
+
+        return method === 'GET' ? readPermissions(req) : writePermissions(req);
+      })
     );
   }
 
@@ -292,9 +330,8 @@ async function fixture() {
 beforeEach(() => {
   vi.stubEnv('WHATSAPP_COEXISTENCE_ENABLED', 'true');
   vi.stubEnv('WHATSAPP_COEXISTENCE_HISTORY_REQUEST_ENABLED', 'true');
-  vi.stubEnv('WHATSAPP_COEXISTENCE_APP_ID', app);
-  vi.stubEnv('WHATSAPP_COEXISTENCE_RELAY_WABA_ID', waba);
-  vi.stubEnv('WHATSAPP_COEXISTENCE_RELAY_PHONE_ID', phone);
+  vi.stubEnv('NEXT_PUBLIC_SITE_URL', origin);
+  vi.stubEnv('WHATSAPP_COEXISTENCE_RELAY_PHONE_ID', '999999');
   cleanup = async () => {};
 });
 
@@ -307,8 +344,6 @@ afterEach(async () => {
 it.each([
   ['WHATSAPP_COEXISTENCE_HISTORY_REQUEST_ENABLED', 'false'],
   ['WHATSAPP_COEXISTENCE_ENABLED', 'TRUE'],
-  ['WHATSAPP_COEXISTENCE_RELAY_PHONE_ID', '000987654321'],
-  ['WHATSAPP_COEXISTENCE_RELAY_PHONE_ID', waba],
 ])(
   'returns no-store 404 before auth/RPC with invalid %s=%s',
   async (key, value) => {
@@ -326,7 +361,64 @@ it.each([
   }
 );
 
-it('inspects only via the verified cookie identity and exact configured pins', async () => {
+it('records owner history-only consent without granting review or dispatch', async () => {
+  const { request, actor, session, requestId, graph, wire, state } =
+    await fixture();
+
+  state.status = { state: 'unavailable' };
+
+  const command = {
+    context,
+    request_id: requestId,
+    previous_request_id: null,
+    version: 'projection-v1',
+    history: true,
+    contacts: false,
+  };
+
+  const post = (
+    body: typeof command & { phone_number_id?: string },
+    cookie?: string
+  ) =>
+    request('POST', {
+      permissions: true,
+      body: JSON.stringify(body),
+      headers: {
+        'content-type': 'application/json',
+        ...(cookie !== undefined && { cookie }),
+      },
+    });
+
+  expect((await post(command, '')).status).toBe(401);
+  expect((await post({ ...command, contacts: true })).status).toBe(400);
+  expect((await post({ ...command, phone_number_id: phone })).status).toBe(400);
+  expect(wire.filter(({ path }) => path === ownerPath)).toEqual([]);
+  const recorded = await post(command);
+  expect(recorded.status).toBe(200);
+  expect(await recorded.json()).toMatchObject({
+    history: true,
+    contacts: false,
+    dispatch_authorized: false,
+  });
+  expect(wire.filter(({ path }) => path === ownerPath)).toEqual([
+    {
+      path: ownerPath,
+      payload: {
+        p_action: 'consent',
+        p_actor_id: actor,
+        p_session_id: session,
+        p_context: context,
+        p_request_id: requestId,
+        p_decision_id: null,
+        p_history: true,
+      },
+    },
+  ]);
+  expect(await (await request('GET')).json()).toEqual({ state: 'unavailable' });
+  expect(graph).not.toHaveBeenCalled();
+});
+
+it('inspects only via the verified cookie identity and server-resolved scope', async () => {
   const { request, graph, wire, ready, actor, session } = await fixture();
   const response = await request('GET');
   expect(response.headers.get('cache-control')).toBe('private, no-store');
@@ -334,13 +426,11 @@ it('inspects only via the verified cookie identity and exact configured pins', a
   expect(await response.json()).toEqual(ready);
   expect(wire.filter(({ path }) => path?.startsWith('/rest/'))).toEqual([
     {
-      path: statusPath,
+      path: ownerPath,
       payload: {
         p_actor_id: actor,
         p_session_id: session,
-        p_app_id: app,
-        p_waba_id: waba,
-        p_phone_id: phone,
+        p_action: 'inspect',
       },
     },
   ]);
@@ -437,13 +527,11 @@ it('submits history once from the committed receipt and redirects to sanitized s
   );
   expect(wire.filter(({ path }) => path?.startsWith('/rest/'))).toEqual([
     {
-      path: startPath,
+      path: ownerPath,
       payload: {
         p_actor_id: actor,
         p_session_id: session,
-        p_app_id: app,
-        p_waba_id: waba,
-        p_phone_id: phone,
+        p_action: 'start',
         p_context: context,
         p_decision_id: decisionId,
         p_request_id: requestId,
@@ -473,19 +561,19 @@ it.each([503, 307, 421])(
       wire
         .filter(({ path }) => path?.startsWith('/rest/'))
         .map(({ path }) => path)
-    ).toEqual([startPath]);
+    ).toEqual([ownerPath]);
     expect(graph).not.toHaveBeenCalled();
   }
 );
 
-it.each(['wrong phone', 'wrong request', 'extra field'] as const)(
+it.each(['invalid phone', 'wrong request', 'extra field'] as const)(
   'does not dispatch or settle a start receipt with %s',
   async (variant) => {
     const { request, state, start, graph, addPermit, wire } = await fixture();
     addPermit();
     state.start =
-      variant === 'wrong phone'
-        ? { ...start, phone_number_id: '1111' }
+      variant === 'invalid phone'
+        ? { ...start, phone_number_id: '01111' }
         : variant === 'wrong request'
           ? { ...start, request_id: randomUUID() }
           : { ...start, account_id: randomUUID() };
@@ -495,7 +583,7 @@ it.each(['wrong phone', 'wrong request', 'extra field'] as const)(
       wire
         .filter(({ path }) => path?.startsWith('/rest/'))
         .map(({ path }) => path)
-    ).toEqual([startPath]);
+    ).toEqual([ownerPath]);
     expect(await (await request('GET')).json()).toEqual({ state: 'started' });
   }
 );
@@ -557,7 +645,12 @@ it('does not dispatch when SQL committed a start but its ACK was lost', async ()
   state.loseStartAck = true;
   expect((await request('POST')).status).toBe(503);
   expect(await (await request('GET')).json()).toEqual({ state: 'started' });
-  expect(wire.filter(({ path }) => path === startPath)).toHaveLength(1);
+  expect(
+    wire.filter(
+      ({ path, payload }) =>
+        path === ownerPath && rpcArgsSchema.parse(payload).p_action === 'start'
+    )
+  ).toHaveLength(1);
   expect(wire.some(({ path }) => path === finishPath)).toBe(false);
   expect(graph).not.toHaveBeenCalled();
 });
@@ -578,6 +671,11 @@ it('rate limits submission separately from inspect without more start calls', as
     expect((await request('POST')).status).toBe(409);
   expect((await request('POST')).status).toBe(429);
   expect((await request('GET')).status).toBe(200);
-  expect(wire.filter(({ path }) => path === startPath)).toHaveLength(5);
+  expect(
+    wire.filter(
+      ({ path, payload }) =>
+        path === ownerPath && rpcArgsSchema.parse(payload).p_action === 'start'
+    )
+  ).toHaveLength(5);
   expect(graph).not.toHaveBeenCalled();
 });
