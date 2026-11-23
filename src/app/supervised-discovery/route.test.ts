@@ -1,5 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { GET, POST } from './route';
+import { createClient } from '@supabase/supabase-js';
+import { memberSignup } from '@/lib/whatsapp/coexistence/member-signup';
 
 const invitation = {
   actorId: '11111111-1111-4111-8111-111111111111',
@@ -15,6 +17,25 @@ const invitation = {
 };
 
 afterEach(() => vi.unstubAllEnvs());
+
+it.each([
+  ['https://crm.example.invalid', 400],
+  ['https://evil.example.invalid', 403],
+])('uses the pinned origin for member POST: %s', async (origin, status) => {
+  const request = new Request('http://localhost:3000/supervised-discovery', {
+    method: 'POST',
+    headers: {
+      cookie: 'fixture=session',
+      origin,
+      'x-forwarded-host': 'evil.example.invalid',
+      'x-forwarded-proto': 'https',
+    },
+  });
+
+  const db = createClient('http://localhost:3200', 'fixture');
+
+  expect((await memberSignup(request, db, undefined, undefined, undefined, 'https://crm.example.invalid')).status).toBe(status);
+});
 
 it('denies direct anonymous inspection or launch even with flags and a legacy invitation configured', async () => {
   vi.stubEnv('WHATSAPP_COEXISTENCE_ENABLED', 'true');

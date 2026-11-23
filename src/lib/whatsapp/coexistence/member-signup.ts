@@ -93,7 +93,8 @@ export async function memberSignup(
     appId: string;
     loginConfigId: string;
     partnerId: string;
-  }) => Promise<boolean>
+  }) => Promise<boolean>,
+  canonicalOrigin?: string
 ) {
   const url = new URL(request.url);
   const post = request.method === 'POST';
@@ -108,7 +109,7 @@ export async function memberSignup(
     url.hash ||
     url.username ||
     url.password ||
-    (post && request.headers.get('origin') !== url.origin) ||
+    (post && request.headers.get('origin') !== (canonicalOrigin ?? url.origin)) ||
     (request.headers.has('sec-fetch-site') &&
       request.headers.get('sec-fetch-site') !== 'same-origin')
   )

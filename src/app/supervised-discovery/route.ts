@@ -13,12 +13,18 @@ async function handle(request: Request) {
   if (!hasSignupCookieCredentials(request)) return signupError(401);
 
   try {
+    const origin = process.env.NEXT_PUBLIC_SITE_URL;
+
+    if (!origin || new URL(origin).origin !== origin || !origin.startsWith('https://'))
+      return signupError(503);
+
     return await memberSignup(
       request,
       await createClient(),
       undefined,
       reviewMemberReceiver,
-      reviewMemberAppRouting
+      reviewMemberAppRouting,
+      origin
     );
   } catch {
     return signupError(503);
