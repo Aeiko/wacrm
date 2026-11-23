@@ -7,6 +7,7 @@ export default async function SettingsPage() {
   return (
     <SettingsClient
       memberSignupEnabled={
+        process.env.WHATSAPP_MEMBER_LAUNCH_PREVIEW === 'true' ||
         process.env.WHATSAPP_COEXISTENCE_ENABLED === 'true' &&
         process.env.WHATSAPP_COEXISTENCE_MEMBER_SIGNUP_ENABLED === 'true'
       }

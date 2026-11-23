@@ -32,6 +32,7 @@ const upstreams={auth:{host:auth,port:fixture?(fixturePorts?.auth??19999):9999},
 const origin='https://'+crm;
 const apiOrigin='https://'+api;
 const member=process.env.LOGIN_MEMBER_SIGNUP_ENABLED==='true';
+const memberPreview=process.env.LOGIN_MEMBER_LAUNCH_PREVIEW==='true';
 const ownerHistory=process.env.LOGIN_HISTORY_REQUEST_ENABLED==='true';
 const registration=process.env.LOGIN_PUBLIC_EMAIL_REGISTRATION==='true';
 const callback=origin+'/auth/callback';
@@ -76,7 +77,7 @@ function limited(kind,address){
   return ++buckets.get(key).count>budget[kind];
 }
 
-async function session(s,{signupOnly=false}={}){
+async function session(s,{signupOnly=false,confirmed=false}={}){
   if(!/^Bearer [A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(s??''))return false;
 
   try{
@@ -90,6 +91,8 @@ return false;}
     // GoTrue validates the actual bearer; role and subject come from its verified user response.
     const {id,role,aud,email_confirmed_at,app_metadata}=await r.json();
     const claims=JSON.parse(Buffer.from(s.split('.')[1],'base64url'));
+
+    if(confirmed&&!email_confirmed_at)return null;
 
     if(signupOnly&&(!email_confirmed_at||app_metadata?.wacrm_email_first!==true||!claims.amr?.some(x=>x.method==='email/signup')))return null;
 
@@ -220,7 +223,9 @@ function memberBody(raw){
 async function memberRequest(req,res,path,query){
   const page=path==='/settings/connect-whatsapp', post=req.method==='POST';
 
-  if(!member||(page?!['GET','HEAD'].includes(req.method):!['GET','POST'].includes(req.method)))return end(res,404);
+  if(memberPreview&&!page)return end(res,404);
+
+  if(!(member||memberPreview)||(page?!['GET','HEAD'].includes(req.method):!['GET','POST'].includes(req.method)))return end(res,404);
 
   if(query!==undefined&&(!page||!/^_rsc=[A-Za-z0-9_-]{1,64}$/.test(query)))return end(res,404);
   const h=req.headers,d=req.headersDistinct;
@@ -237,7 +242,7 @@ async function memberRequest(req,res,path,query){
 
   if(post&&Number(h['content-length'])>40*1024)return end(res,413);
   const bearer=cookieBearer(req);
-  const id=await session(bearer);
+  const id=await session(bearer,{confirmed:memberPreview});
 
   if(!id)return end(res,401);
 

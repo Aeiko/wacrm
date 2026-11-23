@@ -68,6 +68,8 @@ test('permanent member gateway retains independent registration, member, and rep
   writeFileSync(join(dir, 'anon'), anon);
   const calls = [];
 
+  let confirmed = true;
+
   let profiles = [
     { user_id: id, account_id: workspace, account_role: 'viewer' },
   ];
@@ -77,7 +79,7 @@ test('permanent member gateway retains independent registration, member, and rep
       res.writeHead(401).end();
     else
       res.end(
-        JSON.stringify({ id, role: 'authenticated', aud: 'authenticated' })
+        JSON.stringify({ id, role: 'authenticated', aud: 'authenticated', email_confirmed_at: confirmed ? '2026-01-01' : null })
       );
   });
 
@@ -205,6 +207,21 @@ test('permanent member gateway retains independent registration, member, and rep
     await status(404, action, post(launch));
     await status(404, '/api/whatsapp/send', post(launch));
     await status(404, '/signup');
+    await stop();
+    await start({ LOGIN_MEMBER_LAUNCH_PREVIEW: 'true' });
+    await status(401, page);
+    confirmed = false;
+    await status(401, page, { headers: { cookie } });
+    confirmed = true;
+    await status(200, page, { headers: { cookie } });
+    await status(404, page, post(launch));
+    await status(404, action, post({ action: 'activate' }));
+    await status(404, action, post({ action: 'finish', code: 'discarded' }));
+    await status(404, '/api/whatsapp/send', post(launch));
+    const initialProfiles = profiles;
+    profiles = [];
+    await status(403, page, { headers: { cookie } });
+    profiles = initialProfiles;
     await stop();
     await start({
       LOGIN_MEMBER_SIGNUP_ENABLED: 'true',

@@ -14,7 +14,7 @@ GATEWAY = PREFIX + 'gateway'
 def build(cidrs, mode='off'):
     if mode == 'off':
         return {'http': {}}
-    if mode not in ('inert', 'enabled'):
+    if mode not in ('inert', 'enabled', 'launch-preview'):
         raise ValueError('unknown member routing mode')
     nets = [ipaddress.ip_network(cidr) for cidr in cidrs]
     if not (10 <= len(nets) <= 100 and len(set(nets)) == len(nets)
@@ -27,6 +27,8 @@ def build(cidrs, mode='off'):
         'inspect': 'Path(`/supervised-discovery`) && Method(`GET`)',
         'command': f'Path(`/supervised-discovery`) && Method(`POST`) && Header(`Origin`, `https://{SITE}`)',
     }
+    if mode == 'launch-preview':
+        rules = {'page': rules['page']}
     return {'http': {
         'routers': {PREFIX + name: {
             'rule': f'Host(`{SITE}`) && ({rule}) && {peer}',
@@ -44,7 +46,7 @@ def build(cidrs, mode='off'):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('mode', choices=['off', 'inert', 'enabled'], nargs='?', default='off')
+    parser.add_argument('mode', choices=['off', 'inert', 'enabled', 'launch-preview'], nargs='?', default='off')
     mode = parser.parse_args().mode
     cidrs = []
     if mode != 'off':

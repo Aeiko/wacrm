@@ -20,6 +20,17 @@ export type DiscoverySdk = {
   ): void;
 };
 
+export function openDiscoveryPreview(sdk: DiscoverySdk, appId: string, configId: string) {
+  const config_id = id.parse(configId);
+  sdk.init({ appId: id.parse(appId), version: 'v27.0' });
+  sdk.login(() => {}, {
+    config_id,
+    response_type: 'code',
+    override_default_response_type: true,
+    extras: { version: 'v5' },
+  });
+}
+
 /** Accept only an already loaded SDK supplied by the private host; never listen for FINISH. */
 export function createDiscoveryProvider(
   sdk: DiscoverySdk,

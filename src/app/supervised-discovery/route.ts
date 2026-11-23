@@ -10,6 +10,8 @@ import {
 } from '@/lib/whatsapp/coexistence/member-receiver-review';
 
 async function handle(request: Request) {
+  if (process.env.WHATSAPP_MEMBER_LAUNCH_PREVIEW === 'true') return signupError(404);
+
   if (!hasSignupCookieCredentials(request)) return signupError(401);
 
   try {
