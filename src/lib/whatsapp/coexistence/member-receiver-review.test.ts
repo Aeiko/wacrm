@@ -11,6 +11,7 @@ const release = `sha256:${'a'.repeat(64)}`;
 
 const proof = {
   ...pins,
+  epoch: "e".repeat(64),
   callback,
   release,
   dashboardEvidence: 'b'.repeat(64),
@@ -22,23 +23,26 @@ const proof = {
 };
 
 const now = Date.parse('2026-11-23T06:01:00Z');
+const heartbeat = { epoch: proof.epoch, release, since: proof.reviewedAt, checkedAt: new Date(now).toISOString() };
+const monitor = JSON.stringify(heartbeat);
 
 it('requires the reviewed release, exact pins and current bounded evidence', () => {
   const raw = JSON.stringify(proof);
 
-  expect(appRoutingMatches(raw, pins, release, now)).toBe(true);
-  expect(appRoutingMatches(raw, pins, undefined, now)).toBe(false);
+  expect(appRoutingMatches(raw, pins, release, monitor, now)).toBe(true);
+  expect(appRoutingMatches(raw, pins, undefined, monitor, now)).toBe(false);
   expect(
-    appRoutingMatches(raw, { ...pins, loginConfigId: '888' }, release, now)
+    appRoutingMatches(raw, { ...pins, loginConfigId: '888' }, release, monitor, now)
   ).toBe(false);
   expect(
-    appRoutingMatches(raw, pins, release, Date.parse(proof.expiresAt))
+    appRoutingMatches(raw, pins, release, monitor, Date.parse(proof.expiresAt))
   ).toBe(false);
   expect(
     appRoutingMatches(
       JSON.stringify({ ...proof, accountUpdateVersion: null }),
       pins,
       release,
+      monitor,
       now
     )
   ).toBe(false);
@@ -47,9 +51,20 @@ it('requires the reviewed release, exact pins and current bounded evidence', () 
       JSON.stringify({ ...proof, callback: 'https://wrong.example/' }),
       pins,
       release,
+      monitor,
       now
     )
   ).toBe(false);
+});
+
+it('denies a still-fresh receipt after epoch change, coverage loss or a stale heartbeat', () => {
+  const raw = JSON.stringify(proof);
+
+  expect(appRoutingMatches(raw, pins, release, monitor, now)).toBe(true);
+  expect(appRoutingMatches(raw, pins, release, undefined, now)).toBe(false);
+  expect(appRoutingMatches(raw, pins, release, monitor, now + 5_001)).toBe(false);
+  expect(appRoutingMatches(raw, pins, release, JSON.stringify({ ...heartbeat, epoch: 'f'.repeat(64) }), now)).toBe(false);
+  expect(appRoutingMatches(raw, pins, release, JSON.stringify({ ...heartbeat, since: heartbeat.checkedAt }), now)).toBe(false);
 });
 
 it.each([undefined, callback, 'https://wrong.example/'])(
