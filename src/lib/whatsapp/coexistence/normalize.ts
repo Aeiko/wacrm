@@ -98,17 +98,24 @@ function historyStatus(
   status: string | undefined
 ): MessageOperation['status'] | null {
   switch (status) {
+    // Meta's history examples use both lowercase and uppercase status values.
     case undefined:
     case 'sent':
+    case 'SENT':
       return 'sent';
     case 'delivered':
+    case 'DELIVERED':
       return 'delivered';
     case 'played':
+    case 'PLAYED':
     case 'read':
+    case 'READ':
       return 'read';
     case 'error':
+    case 'ERROR':
       return 'failed';
     case 'pending':
+    case 'PENDING':
       return 'pending';
     default:
       return null;

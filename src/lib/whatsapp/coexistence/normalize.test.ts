@@ -848,6 +848,49 @@ describe('Coexistence delivery normalization', () => {
     ]);
   });
 
+  it.each([
+    ['sent', 'SENT', 'sent'],
+    ['delivered', 'DELIVERED', 'delivered'],
+    ['read', 'READ', 'read'],
+    ['played', 'PLAYED', 'read'],
+    ['error', 'ERROR', 'failed'],
+    ['pending', 'PENDING', 'pending'],
+    ['future_status', 'FUTURE_STATUS', null],
+    [' Read ', 'Read', null],
+  ])('interprets only documented history statuses: %s / %s', (lower, upper, expected) => {
+    for (const status of [lower, upper]) {
+      const result = normalizeDelivery(
+        delivery('history', {
+          history: [
+            {
+              threads: [
+                {
+                  id: '15550005678',
+                  messages: [
+                    {
+                      from: '15550005678',
+                      id: 'wamid.history-status',
+                      timestamp: '1700000000',
+                      type: 'text',
+                      text: { body: 'Past message' },
+                      history_context: { status },
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        })
+      );
+
+      expect(result).toMatchObject(
+        expected === null
+          ? [{ kind: 'quarantine', code: 'unsupported_message_content_or_status' }]
+          : [{ kind: 'message', source: 'history', status: expected }]
+      );
+    }
+  });
+
   it('quarantines directionless history instead of inventing an outbound sender', () => {
     const result = normalizeDelivery(
       delivery('history', {
