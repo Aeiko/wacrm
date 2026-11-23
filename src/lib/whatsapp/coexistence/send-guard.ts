@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash, timingSafeEqual } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { deadlineFetch } from '@/lib/request-deadline';
 import { decrypt } from '../encryption';
@@ -156,9 +157,16 @@ export async function assertOutboundSendAllowed(
   try {
     const context = sendConnection.getStore();
 
+    const credential = context?.privateRestOrigin
+      ? (await readFile('/run/wacrm-reply/access/token', 'utf8')).trim()
+      : process.env.SUPABASE_SERVICE_ROLE_KEY!;
+
+    if (context?.privateRestOrigin && !/^[a-f0-9]{64}$/.test(credential))
+      throw new Error('Missing private reply credential');
+
     const db = createClient(
       context?.privateRestOrigin ?? process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!,
+      credential,
       {
         global: { fetch: deadlineFetch },
         auth: { persistSession: false, autoRefreshToken: false },
