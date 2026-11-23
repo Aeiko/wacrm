@@ -4,8 +4,11 @@ DECLARE
   s uuid:=gen_random_uuid(); s2 uuid:=gen_random_uuid(); os uuid:=gen_random_uuid(); ss uuid:=gen_random_uuid();
   a uuid; b uuid; op uuid; cfg whatsapp_config%ROWTYPE; old_rev uuid; r jsonb;
   inbox_payload jsonb:='{"deliveries":[{"field":"messages"}]}';
-  lease record; stopped_lease record; conv uuid:=gen_random_uuid(); contact uuid:=gen_random_uuid();
-  reply_key uuid:=gen_random_uuid();
+  lease record; stopped_lease record; conv uuid:=gen_random_uuid();
+  reply_key uuid:=gen_random_uuid(); decision uuid:=gen_random_uuid(); history_request uuid:=gen_random_uuid();
+  context text; live_change jsonb; history_change jsonb; stop_change jsonb; inbox uuid;
+  stop_idx integer; invalid_history jsonb; mixed jsonb;
+  projected jsonb;
   p jsonb:='{"app_id":"611","login_config_id":"612","partner_id":"613","waba_id":"620","phone_number_id":"630"}';
   number CONSTANT jsonb:='{"normalized_phone_number":"+15550174001"}';
   cipher CONSTANT text:=repeat('a',24)||':aa:'||repeat('b',32);
@@ -135,16 +138,73 @@ BEGIN
   INSERT INTO coexistence_jobs(config_id,account_id,generation,payload,dedupe_key)
     VALUES(cfg.id,a,cfg.coexistence_generation,inbox_payload,'live-stop');
   SELECT * INTO STRICT stopped_lease FROM wacrm_pilot_worker.coexistence_claim(5);
-  INSERT INTO contacts(id,user_id,account_id,phone) VALUES(contact,owner_id,a,'15550174002');
-  INSERT INTO conversations(id,user_id,account_id,contact_id) VALUES(conv,owner_id,a,contact);
-  INSERT INTO messages(conversation_id,sender_type,message_id,message_source)
-    VALUES(conv,'customer','fixture-inbound','cloud_api');
+  live_change:=jsonb_build_object('entry_id','620','field','messages','dedupe_key',repeat('1',64)||':0:0',
+    'value','{"metadata":{"phone_number_id":"630"},"messages":[{"id":"fixture-live","from":"15550174003","type":"text","text":{"body":"new fixture"}}]}'::jsonb);
+  history_change:=jsonb_build_object('entry_id','620','field','history','dedupe_key',repeat('2',64)||':0:0',
+    'value','{"metadata":{"phone_number_id":"630"},"messages":[{"id":"fixture-history","from":"15550174003","type":"text","text":{"body":"prior fixture"}}]}'::jsonb);
+  ASSERT (wacrm_managed_receiver.coexistence_ingress('611',NULL,true,true,jsonb_build_array(history_change))->>'status')::int=403;
+  ASSERT (wacrm_managed_receiver.coexistence_ingress('611',NULL,true,true,jsonb_build_array(live_change))->>'status')::int=200;
+  SELECT * INTO STRICT lease FROM wacrm_pilot_worker.coexistence_claim(5);
+  projected:=jsonb_build_object('kind','live_message','source','cloud_api','sender_type','customer',
+    'identity','{"phone":"15550174003"}'::jsonb,'wamid','fixture-live','occurred_at',(statement_timestamp()-interval '1 second')::text,
+    'content_type','text','content_text','new fixture','status','delivered','reply_wamid',NULL,'media_id',NULL,
+    'media_type',NULL,'placeholder',false,'interactive_reply_id',NULL);
+  ASSERT wacrm_pilot_worker.coexistence_commit(lease.id,lease.lease_token,jsonb_build_array(projected))='completed';
+  SELECT conversation_id INTO STRICT inbox FROM messages WHERE message_id='fixture-live';
+  INSERT INTO wacrm_history_worker.selection VALUES(true,cfg.id);
+  PERFORM coexistence_import_consent(owner_id,a,os,cfg.id,cfg.coexistence_generation,'611','620','630',decision,true,false);
+  SELECT t.context INTO context FROM coexistence_import_settings_snapshot(owner_id,a,os,'611','620','630') t;
+  ASSERT wacrm_history_worker.review(owner_id,a,os,context,decision,history_request);
+  ASSERT coexistence_history_request_start(owner_id,os,'611','620','630',context,decision,history_request) @> '{"dispatch":true}';
+  ASSERT coexistence_history_request_start(owner_id,os,'611','620','630',context,decision,history_request) @> '{"dispatch":false}';
+  ASSERT (wacrm_managed_receiver.coexistence_ingress('611',NULL,true,true,jsonb_build_array(history_change))->>'status')::int=403;
+  ASSERT coexistence_history_request_finish(history_request,'accepted');
+  ASSERT (wacrm_managed_receiver.coexistence_ingress('611',NULL,true,true,jsonb_build_array(history_change))->>'status')::int=200;
+  ASSERT NOT EXISTS(SELECT FROM wacrm_pilot_worker.coexistence_claim(5));
+  SELECT * INTO STRICT lease FROM wacrm_history_worker.coexistence_claim(5);
+  projected:=projected||jsonb_build_object('kind','message','source','history','wamid','fixture-history',
+    'content_text','prior fixture','occurred_at',(clock_timestamp()-interval '1 hour')::text);
+  ASSERT wacrm_history_worker.coexistence_commit(lease.id,lease.lease_token,jsonb_build_array(projected))='completed';
+  ASSERT (SELECT count(*) FROM messages WHERE conversation_id=inbox AND message_id IN ('fixture-live','fixture-history'))=2;
+  ASSERT (wacrm_managed_receiver.coexistence_ingress('611',NULL,true,true,jsonb_build_array(history_change))->>'status')::int=200;
+  ASSERT NOT EXISTS(SELECT FROM wacrm_history_worker.coexistence_claim(5));
+  conv:=inbox;
   PERFORM set_config('request.jwt.claims',jsonb_build_object('sub',owner_id,'role','authenticated','session_id',os)::text,true);
   SET LOCAL ROLE authenticated;
   ASSERT claim_managed_inbox_reply(a,conv,reply_key,cfg.id,cfg.coexistence_generation,os)='claimed';
   ASSERT claim_managed_inbox_reply(a,conv,reply_key,cfg.id,cfg.coexistence_generation,os)='duplicate';
   ASSERT claim_managed_inbox_reply(b,conv,gen_random_uuid(),cfg.id,cfg.coexistence_generation,os)='denied';
   RESET ROLE;
+
+  PERFORM set_config('request.jwt.claims',jsonb_build_object('sub',stranger_id,'role','authenticated','session_id',ss)::text,true);
+  SET LOCAL ROLE authenticated;
+  ASSERT NOT EXISTS(SELECT FROM messages WHERE conversation_id=inbox);
+  ASSERT claim_managed_inbox_reply(a,inbox,gen_random_uuid(),cfg.id,cfg.coexistence_generation,ss)='denied';
+  RESET ROLE;
+  PERFORM set_config('request.jwt.claims',jsonb_build_object('sub',owner_id,'role','authenticated','session_id',os)::text,true);
+
+  FOR stop_idx IN 0..1 LOOP
+    BEGIN
+      stop_change:=jsonb_build_object('entry_id','620','field','account_update','dedupe_key',repeat('3',64)||':0:'||stop_idx,
+        'value','{"event":"ACCOUNT_OFFBOARDED"}'::jsonb);
+      invalid_history:=history_change||jsonb_build_object('dedupe_key',repeat('3',64)||':0:'||(1-stop_idx));
+      mixed:=CASE stop_idx WHEN 0 THEN jsonb_build_array(stop_change,invalid_history)
+        ELSE jsonb_build_array(invalid_history,stop_change) END;
+      -- Receiver commits this RPC separately before submitting the original ordered batch.
+      FOR replay IN 1..2 LOOP
+        ASSERT (wacrm_managed_receiver.coexistence_ingress('611',NULL,true,true,jsonb_build_array(stop_change))->>'status')::int=200;
+        ASSERT (wacrm_managed_receiver.coexistence_ingress('611',NULL,true,true,mixed)->>'status')::int=403;
+        ASSERT EXISTS(SELECT FROM coexistence_receiver_vetoes WHERE app_id='611' AND waba_id='620');
+        ASSERT wacrm_pilot_worker.coexistence_commit(stopped_lease.id,stopped_lease.lease_token,'[]')='stale';
+        ASSERT NOT EXISTS(SELECT FROM wacrm_history_worker.coexistence_claim(5));
+        SET LOCAL ROLE authenticated;
+        ASSERT claim_managed_inbox_reply(a,inbox,gen_random_uuid(),cfg.id,cfg.coexistence_generation,os)='denied';
+        RESET ROLE;
+      END LOOP;
+      RAISE SQLSTATE 'P9001';
+    EXCEPTION WHEN SQLSTATE 'P9001' THEN NULL;
+    END;
+  END LOOP;
 
   SELECT connection_revision INTO old_rev FROM accounts WHERE id=a;
   ASSERT coexistence_member_signup(member_id,s,a,'activation_read',p)='{"status":"activated"}';
