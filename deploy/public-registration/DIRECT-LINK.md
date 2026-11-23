@@ -1,0 +1,9 @@
+# Direct password setup from a signup email
+
+The packaged Next app and confirmation email template are unchanged. The API email link redirects to a WACRM-branded CRM page. The page asks for a password twice; **Verify email and set password** submits the only mutating browser request. On success the user signs in with the new password.
+
+The CRM gateway can read the signup browser's existing Supabase verifier cookie; the separate API hostname cannot. Before touching GoTrue the gateway checks the current email token and matching latest signup challenge via the private migration 092 RPC. The gateway then uses only the freshly exchanged GoTrue signup session for password setup, never the browser's existing login. The exchange credentials and submitted password stay in request memory; no new browser credentials are set. The gateway attempts to revoke the transient session after the write. Keep ingress access logs, traces and caching off for both exact link URLs. The original email URL and the CRM preview URL contain the token, so browsers or mail clients may retain those URLs in history.
+
+A fresh browser, mismatched challenge, or expired flow is refused before spending the token. GoTrue confirms and sets the password in separate operations: an upstream outage or a new signup invalidating the challenge during that sequence can still interrupt completion. Do not fall back to an existing session, reuse a password, or auto-confirm. The preflight uses a conservative 290-second maximum based on GoTrue's default five-minute flow; expiry in the email template does not extend browser PKCE eligibility.
+
+Before rollout, apply SQL092 and verify the RPC remains unreachable via the public REST gateway. Replace the registration route file and gateway together; the old API verification POST is no longer accepted. Run the packaged-browser flow against disposable GoTrue and Mailpit using the intended browser and release images before considering a live rollout.

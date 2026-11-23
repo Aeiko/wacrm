@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -17,6 +18,9 @@ const link = new URLSearchParams({ token: 'pkce_'+ 'a'.repeat(56), type: 'signup
 const signup = '/auth/v1/signup?' + new URLSearchParams({ redirect_to: callback });
 const anon = 'synthetic-anon-key-not-a-credential';
 const publicHeaders = { origin, apikey: anon, authorization: `Bearer ${anon}`, 'content-type': 'application/json;charset=UTF-8' };
+const finish='/signup/finish';
+const verifierValue='b'.repeat(56);
+const verifierCookie=value=>`sb-api-auth-token-code-verifier=base64-${Buffer.from(JSON.stringify(value)).toString('base64url')}`;
 const formHeaders = { origin: 'null', 'sec-fetch-site': 'same-origin', 'content-type':'application/x-www-form-urlencoded' };
 const exchange = '/auth/v1/token?grant_type=pkce';
 const addr={ auth:'127.0.0.4', rest:'127.0.0.4', proxy:'127.0.0.2', listen:'127.0.0.1', crmIP:'127.0.0.3' };
@@ -45,7 +49,8 @@ await test('registration is opt-in, email-only and bounded independently of logi
   mkdirSync(join(dir,'gateway'));writeFileSync(join(dir,'anon'),anon);
   const authCalls=[];
   const current={email_confirmed_at:null,app_metadata:{wacrm_email_first:true}};
-  const jwt=method=>`Bearer e30.${Buffer.from(JSON.stringify({sub:code,role:'authenticated',aud:'authenticated',iss:`https://${api}/auth/v1`,exp:Math.floor(Date.now()/1000)+300,session_id:code,amr:[{method}]})).toString('base64url')}.fixture`;
+  const exp=Math.floor(Date.now()/1000)+300;
+  const jwt=method=>`Bearer e30.${Buffer.from(JSON.stringify({sub:code,role:'authenticated',aud:'authenticated',iss:`https://${api}/auth/v1`,exp,session_id:code,amr:[{method}]})).toString('base64url')}.fixture`;
 
   const auth=await listen(0,addr.auth,async(req,res)=>{
     const chunks=[];
@@ -54,8 +59,13 @@ for await(const c of req)chunks.push(c);
     const raw=Buffer.concat(chunks).toString();
 
     if(req.url==='/rpc/can_confirm_public_registration')return res.end(JSON.stringify(JSON.parse(raw).p_token===link.get('token')));
-    authCalls.push({url:req.url,method:req.method,body:raw&&JSON.parse(raw)});
+    if(req.url==='/rpc/can_finish_public_registration'){
+      const {p_token,p_challenge}=JSON.parse(raw);
+      return res.end(JSON.stringify(p_token===link.get('token')&&p_challenge===createHash('sha256').update(verifierValue).digest('base64url')));
+    }
+    authCalls.push({url:req.url,method:req.method,body:raw&&JSON.parse(raw),authorization:req.headers.authorization});
 
+    if(req.url==='/token?grant_type=pkce')return res.end(JSON.stringify({access_token:jwt('email/signup').slice(7)}));
     if(req.url==='/user'&&req.method==='GET')return res.end(JSON.stringify({id:code,role:'authenticated',aud:'authenticated',...current}));
 
     if(req.url==='/user'&&req.method==='PUT'){
@@ -64,7 +74,10 @@ for await(const c of req)chunks.push(c);
       return res.end('{}');
     }
 
-    if(req.url.startsWith('/verify?'))res.writeHead(303,{location:callback+'&code='+code});
+    if(req.url.startsWith('/verify?')){
+      current.email_confirmed_at='2000-01-01T00:00:00Z';
+      res.writeHead(303,{location:callback+'&code='+code});
+    }
     else res.writeHead(200);
     res.end();
   });
@@ -115,16 +128,23 @@ return;}catch{await delay(40);}
     assert.deepEqual(sent,{email:account.email,data:{full_name:account.data.full_name,wacrm_email_first:true},code_challenge:account.code_challenge,code_challenge_method:'s256'});
     assert.equal((await call(signup,{method:'POST',headers:{...publicHeaders,'content-type':'text/plain'},body:JSON.stringify(account)})).status,415);
     assert.equal((await post(account)).status,429);
-    const page=await call('/auth/v1/verify?'+link);
+    const preview=await call('/auth/v1/verify?'+link);
+    assert.equal(preview.status,303);
+    const path=finish+'?token='+link.get('token');
+    assert.equal(preview.headers.location,origin+path);
+    assert.equal(preview.headers['referrer-policy'],'no-referrer');
+    assert.equal((await call(path,{host:crm})).status,409);
+    const page=await call(path,{host:crm,headers:{cookie:verifierCookie(verifierValue)}});
     assert.equal(page.status,200);
-    assert.equal(page.headers['referrer-policy'],'no-referrer');
-    assert.match(page.body,/Confirm email/);
-    assert.equal(authCalls.length,1,'preview must not consume the credential');
-    assert.equal((await call('/auth/v1/verify?'+link+'&type=invite')).status,404);
-    assert.equal((await call('/auth/v1/verify',{method:'POST',headers:{...formHeaders,'sec-fetch-site':'cross-site'},body:'token='+link.get('token')})).status,403);
-    const confirmed=await call('/auth/v1/verify',{method:'POST',headers:formHeaders,body:'token='+link.get('token')});
-    assert.equal(confirmed.status,303);assert.equal(confirmed.headers.location,callback+'&code='+code);
-    assert.equal(authCalls[1].method,'GET');
+    assert.match(page.body,/Verify email and set password/);
+    assert.equal(authCalls.length,1,'GET must not touch GoTrue');
+    const complete=(cookie, confirm=account.password)=>call(finish,{host:crm,method:'POST',headers:{...formHeaders,...(cookie&&{cookie})},
+      body:new URLSearchParams({token:link.get('token'),password:account.password,confirm}).toString()});
+    assert.equal((await complete(null)).status,409);
+    assert.equal((await complete(verifierCookie('c'.repeat(56)))).status,409);
+    assert.equal((await complete(verifierCookie(verifierValue),'different')).status,400);
+    assert.equal(authCalls.length,1,'invalid browser and password must not touch GoTrue');
+    assert.equal((await call('/auth/v1/verify',{method:'POST',headers:formHeaders,body:'token='+link.get('token')})).status,404);
     assert.equal((await call('/auth/callback?next=%2Fsignup%2Fpassword&code='+code,{host:crm})).body,'/auth/callback');
     assert.equal((await call('/auth/callback?next=%2Fsignup%2Fpassword&token_hash=invalid&type=invite',{host:crm})).status,404);
     assert.equal((await call(exchange,{method:'POST',headers:publicHeaders})).status,404);
@@ -143,6 +163,16 @@ return;}catch{await delay(40);}
     assert.equal((await setPassword('email/signup',{password:account.password,code_challenge:null,code_challenge_method:null})).status,200);
     assert.deepEqual(authCalls.findLast(x=>x.method==='PUT').body,{password:account.password});
     assert.equal((await setPassword('email/signup')).status,403);
+    current.app_metadata={wacrm_email_first:true};
+    const unrelated=Buffer.from(JSON.stringify({access_token:jwt('password').slice(7)})).toString('base64url');
+    const completed=await complete(verifierCookie(verifierValue)+`; sb-api-auth-token=base64-${unrelated}`);
+    assert.equal(completed.status,303);
+    assert.equal(completed.headers.location,'/login');
+    assert.equal(completed.headers['set-cookie'],undefined);
+    const write=authCalls.findLast(x=>x.method==='PUT');
+    assert.equal(write.body.password,account.password);
+    assert.equal(write.authorization,jwt('email/signup'));
+    assert.equal(authCalls.at(-1).url,'/logout?scope=local');
     assert.equal((await call('/auth/v1/token?grant_type=password',{method:'POST',headers:publicHeaders,body:'{}'})).status,200);
   }finally{await stop();await Promise.all([auth,app].map(s=>new Promise(r=>s.close(r))));rmSync(dir,{recursive:true,force:true});}
 });

@@ -36,7 +36,8 @@ def build(cidrs, gateway='http://172.29.124.8:8080', inert=False):
     route('first-password', api + ' && Path(`/auth/v1/user`) && Method(`PUT`)', 20)
     route('first-password-preflight', api + ' && Path(`/auth/v1/user`) && Method(`OPTIONS`) && Header(`Access-Control-Request-Method`, `PUT`)')
     route('verify-preview', api + ' && Path(`/auth/v1/verify`) && Method(`GET`)', 60)
-    route('verify-submit', api + ' && Path(`/auth/v1/verify`) && Method(`POST`)', 20)
+    route('finish-form', crm + ' && Path(`/signup/finish`) && Method(`GET`)', 60)
+    route('finish-submit', crm + ' && Path(`/signup/finish`) && Method(`POST`)', 20)
     route('exchange', api + ' && Path(`/auth/v1/token`) && Query(`grant_type`, `pkce`) && Method(`POST`)', 20, private)
     return {'http': {'routers': routes, 'middlewares': limits, 'services': {
         name+'gateway': {'loadBalancer': {'passHostHeader': True, 'servers': [{'url': gateway}]}}

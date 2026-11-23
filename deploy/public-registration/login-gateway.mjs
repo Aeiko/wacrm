@@ -1,5 +1,5 @@
 import { createServer, request } from 'node:http';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { isIPv4 } from 'node:net';
 import { readFileSync } from 'node:fs';
 
@@ -35,6 +35,7 @@ const member=process.env.LOGIN_MEMBER_SIGNUP_ENABLED==='true';
 const registration=process.env.LOGIN_PUBLIC_EMAIL_REGISTRATION==='true';
 const callback=origin+'/auth/callback';
 const passwordPath='/signup/password';
+const finishPath='/signup/finish';
 const signupRedirect=callback+'?next='+encodeURIComponent(passwordPath);
 const budget={password:5,refresh_token:30,signup:3,verify:20,pkce:20,firstPassword:20};
 const passwordWrites=new Set();
@@ -162,7 +163,7 @@ return [];}
 
 function end(res,status){res.writeHead(status);res.end();}
 
-function pass(req,res,{host,port},path,keys,body,{method=req.method,confirm=false,memberRoute=false,timeout=8000}={}){
+function pass(req,res,{host,port},path,keys,body,{method=req.method,memberRoute=false,timeout=8000}={}){
   const forward={};
 
 for(const k of keys)if(req.headers[k]!==undefined)forward[k]=req.headers[k];
@@ -172,18 +173,6 @@ for(const k of keys)if(req.headers[k]!==undefined)forward[k]=req.headers[k];
   if(memberRoute)forward['x-forwarded-proto']='https';
 
   const upstream=request({hostname:host,port,path,method,headers:forward,timeout},r=>{
-    if(confirm){
-      r.resume();
-      let location;
-
-try{location=new URL(r.headers.location??'/',apiOrigin);}catch{return end(res,502);}
-
-      if(r.statusCode<300||r.statusCode>=400||location.origin!==origin||location.pathname!=='/auth/callback'||location.username||location.password||location.hash)return end(res,502);
-      res.setHeader('Location',location.href);
-
-      return end(res,303);
-    }
-
     const out={};
 
 for(const [k,v] of Object.entries(r.headers))if(!/^(access-control-|cache-control$|connection$|transfer-encoding$|server$|via$)/.test(k)&&(host===upstreams.crm.host||k!=='set-cookie'))out[k]=v;
@@ -297,38 +286,104 @@ return null;}
   return value===true||value===false?value:null;
 }
 
-async function verify(req,res,query){
+function signupLink(query){
+  const q=new URLSearchParams(query), token=q.get('token');
+
+  return q.size===3&&signupToken.test(token??'')&&q.get('type')==='signup'&&q.get('redirect_to')===signupRedirect?token:null;
+}
+
+function signupVerifier(req){
+  const name=`sb-${api.split('.')[0]}-auth-token-code-verifier=`;
+  const matches=(req.headers.cookie??'').split(';').map(v=>v.trim()).filter(v=>v.startsWith(name));
+
+  if(req.headersDistinct.cookie?.length!==1||matches.length!==1)return null;
+  const packed=matches[0].slice(name.length);
+
+  if(!/^base64-[A-Za-z0-9_-]{1,200}$/.test(packed))return null;
+  try{
+    const value=JSON.parse(Buffer.from(packed.slice(7),'base64url'));
+
+    return isText(value)&&verifier.test(value)?value:null;
+  }catch{return null;}
+}
+
+function finishPage(res,status,content){
+  res.setHeader('Content-Security-Policy',"default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'");
+  res.writeHead(status,{'Content-Type':'text/html; charset=utf-8'});
+
+  return res.end(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WACRM � Set your password</title><style>:root{color-scheme:light dark;font:1rem system-ui}body{margin:0;min-height:100vh;display:grid;place-items:center;background:Canvas;color:CanvasText}main{box-sizing:border-box;width:min(94vw,28rem);padding:2rem;border:1px solid GrayText;border-radius:1rem}form,label{display:grid;gap:.5rem}form{gap:1rem}input,button{font:inherit;padding:.65rem;border-radius:.5rem}button{cursor:pointer}</style><main><strong>WACRM</strong><h1>Set your password</h1>${content}</main></html>`);
+}
+
+async function finishSignup(req,res,query){
   res.setHeader('Referrer-Policy','no-referrer');
+  const unavailable='<p>Open the link in the browser you used to sign up. If it expired, <a href="/signup">start again</a>.</p>';
+  const codeVerifier=signupVerifier(req);
 
   if(req.method==='GET'){
-    const q=new URLSearchParams(query),token=q.get('token');
+    const q=new URLSearchParams(query), token=q.get('token');
 
-    if(q.size!==3||!signupToken.test(token??'')||q.get('type')!=='signup'||q.get('redirect_to')!==signupRedirect)return end(res,404);
-    // Mail scanners may follow the link. Only the explicit form POST spends it.
-    res.setHeader('Content-Security-Policy',`default-src 'none'; form-action 'self' ${origin}; base-uri 'none'; frame-ancestors 'none'`);
-    res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});
+    if(q.size!==1||!signupToken.test(token??''))return end(res,404);
+    if(!codeVerifier)return finishPage(res,409,unavailable);
 
-    return res.end(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="referrer" content="no-referrer"><title>Confirm your WACRM email</title><main><h1>Confirm your WACRM email</h1><p>Continue only if you requested a new WACRM account.</p><form method="post" action="/auth/v1/verify"><input type="hidden" name="token" value="${token}"><button type="submit">Confirm email</button></form></main></html>`);
+    return finishPage(res,200,`<p>Choose a password to verify your email and finish signing up.</p><form method="post" action="${finishPath}"><input type="hidden" name="token" value="${token}"><label>Password<input name="password" type="password" autocomplete="new-password" minlength="6" maxlength="72" required></label><label>Confirm password<input name="confirm" type="password" autocomplete="new-password" minlength="6" maxlength="72" required></label><button>Verify email and set password</button></form>`);
   }
 
   if(req.method!=='POST'||query!==undefined)return end(res,404);
-
-  // no-referrer can produce an opaque Origin on a form navigation.
-  if(req.headersDistinct.origin?.length!==1||![apiOrigin,'null'].includes(req.headers.origin)||req.headers['sec-fetch-site']!=='same-origin'||req.headers['content-type']!=='application/x-www-form-urlencoded')return end(res,403);
-
+  if(req.headersDistinct.origin?.length!==1||![origin,'null'].includes(req.headers.origin)||req.headers['sec-fetch-site']!=='same-origin'||req.headers['content-type']!=='application/x-www-form-urlencoded')return end(res,403);
   if(limited('verify',req.socket.remoteAddress))return end(res,429);
-  const body=await readBody(req,256);
+  if(!codeVerifier)return finishPage(res,409,unavailable);
+  const body=await readBody(req,2048);
 
   if(!body)return end(res,413);
-  const token=/^token=(pkce_[0-9a-f]{56})$/.exec(body.toString())?.[1];
+  const form=new URLSearchParams(body.toString()), token=form.get('token'), password=form.get('password');
 
-  if(!signupToken.test(token??''))return end(res,400);
-  const eligible=await confirmationEligible(token);
+  if(form.size!==3||!signupToken.test(token??'')||!password||password.length<6||Buffer.byteLength(password)>72||password!==form.get('confirm'))return finishPage(res,400,'<p>Passwords must match and be at least six characters, up to 72 bytes. Reopen the email link and try again.</p>');
+  const rest=upstreams.rest;
+  const challenge=createHash('sha256').update(codeVerifier).digest('base64url');
+  const eligible=await fetch(`http://${rest.host}:${rest.port}/rpc/can_finish_public_registration`,{
+    method:'POST',headers:{apikey:anon,authorization:`Bearer ${anon}`,'content-type':'application/json'},
+    body:JSON.stringify({p_token:token,p_challenge:challenge}),redirect:'error',signal:AbortSignal.timeout(3500),
+  });
 
-  if(eligible!==true)return end(res,eligible===false?404:503);
+  if(!eligible.ok){await eligible.body?.cancel();return end(res,503);}
+  if(await eligible.json()!==true)return finishPage(res,409,unavailable);
+  const {host,port}=upstreams.auth;
+  const url=`http://${host}:${port}`;
   const q=new URLSearchParams({token,type:'signup',redirect_to:signupRedirect});
+  const verification=await fetch(`${url}/verify?${q}`,{redirect:'manual',signal:AbortSignal.timeout(8000)});
+  await verification.body?.cancel();
+  const target=new URL(verification.headers.get('location')??'/',origin);
+  const authCode=target.searchParams.get('code');
 
-  return pass(req,res,upstreams.auth,'/verify?'+q,[],undefined,{method:'GET',confirm:true});
+  if(verification.status!==303||target.origin!==origin||target.pathname!=='/auth/callback'||target.hash||target.searchParams.size!==2||target.searchParams.get('next')!==passwordPath||!uuid(authCode))return finishPage(res,409,unavailable);
+  const exchange=await fetch(`${url}/token?grant_type=pkce`,{
+    method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({auth_code:authCode,code_verifier:codeVerifier}),
+    redirect:'error',signal:AbortSignal.timeout(8000),
+  });
+
+  if(!exchange.ok){await exchange.body?.cancel();return finishPage(res,409,unavailable);}
+  const {access_token:accessToken}=await exchange.json();
+  const bearer=`Bearer ${accessToken}`;
+  const id=await session(bearer,{signupOnly:true});
+
+  // Only trust the freshly exchanged signup bearer, never a CRM session cookie.
+  try{
+    if(!id||passwordWrites.has(id))return end(res,403);
+    passwordWrites.add(id);
+    try{
+      if(!await session(bearer,{signupOnly:true}))return end(res,403);
+      const update=await fetch(`${url}/user`,{method:'PUT',headers:{authorization:bearer,'content-type':'application/json'},
+        body:JSON.stringify({password}),redirect:'error',signal:AbortSignal.timeout(8000)});
+      await update.body?.cancel();
+      if(!update.ok)return finishPage(res,409,'<p>Your email was verified, but the password could not be saved. Contact WACRM support.</p>');
+    }finally{passwordWrites.delete(id);}
+  }finally{
+    if(isText(accessToken))await fetch(`${url}/logout?scope=local`,{method:'POST',headers:{authorization:bearer},
+      redirect:'error',signal:AbortSignal.timeout(2000)}).then(r=>r.body?.cancel()).catch(()=>{});
+  }
+  res.setHeader('Location','/login');
+
+  return end(res,303);
 }
 
 const server=createServer({maxHeaderSize:16_384,requestTimeout:8000,headersTimeout:5000,connectionsCheckingInterval:1000},async(req,res)=>{
@@ -346,6 +401,7 @@ const server=createServer({maxHeaderSize:16_384,requestTimeout:8000,headersTimeo
     if(!/^\/[A-Za-z0-9_./-]*$/.test(path)||path.includes('//')||path.split('/').some(x=>x==='.'||x==='..'))return end(res,404);
 
     if(host===crm){
+      if(registration&&path===finishPath)return await finishSignup(req,res,query);
       if(registration&&path==='/auth/callback'&&m==='GET'){
         res.setHeader('Referrer-Policy','no-referrer');
         const q=new URLSearchParams(query);
@@ -402,7 +458,15 @@ if(bytes>26000)return end(res,413);chunks.push(chunk);}
       return pass(req,res,upstreams.crm,raw,pageHeaders);
     }
 
-    if(registration&&path==='/auth/v1/verify')return await verify(req,res,query);
+    if(registration&&path==='/auth/v1/verify'){
+      if(m!=='GET')return end(res,404);
+      const token=signupLink(query);
+      if(!token)return end(res,404);
+      res.setHeader('Referrer-Policy','no-referrer');
+      res.setHeader('Location',`${origin}${finishPath}?token=${token}`);
+
+      return end(res,303);
+    }
     res.setHeader('Vary','Origin');
 
     if(req.headers.origin===origin){res.setHeader('Access-Control-Allow-Origin',origin);res.setHeader('Access-Control-Expose-Headers','Content-Range, Range-Unit, Preference-Applied');}
