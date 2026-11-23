@@ -303,6 +303,7 @@ function signupVerifier(req){
   const packed=matches[0].slice(name.length);
 
   if(!/^base64-[A-Za-z0-9_-]{1,200}$/.test(packed))return null;
+
   try{
     const value=JSON.parse(Buffer.from(packed.slice(7),'base64url'));
 
@@ -328,14 +329,18 @@ async function finishSignup(req,res,query){
     const q=new URLSearchParams(query), token=q.get('token');
 
     if(q.size!==1||!signupToken.test(token??''))return end(res,404);
+
     if(!codeVerifier)return finishPage(res,409,unavailable);
 
     return finishPage(res,200,`<p>Choose a password to verify your email and finish signing up.</p><form method="post" action="${finishPath}"><input type="hidden" name="token" value="${token}"><label>Password<input name="password" type="password" autocomplete="new-password" minlength="6" maxlength="72" required></label><label>Confirm password<input name="confirm" type="password" autocomplete="new-password" minlength="6" maxlength="72" required></label><button>Verify email and set password</button></form>`);
   }
 
   if(req.method!=='POST'||query!==undefined)return end(res,404);
+
   if(req.headersDistinct.origin?.length!==1||![origin,'null'].includes(req.headers.origin)||req.headers['sec-fetch-site']!=='same-origin'||req.headers['content-type']!=='application/x-www-form-urlencoded')return end(res,403);
+
   if(limited('verify',req.socket.remoteAddress))return end(res,429);
+
   if(!codeVerifier)return finishPage(res,409,unavailable);
   const body=await readBody(req,2048);
 
@@ -345,12 +350,16 @@ async function finishSignup(req,res,query){
   if(form.size!==3||!signupToken.test(token??'')||!password||password.length<6||Buffer.byteLength(password)>72||password!==form.get('confirm'))return finishPage(res,400,'<p>Passwords must match and be at least six characters, up to 72 bytes. Reopen the email link and try again.</p>');
   const rest=upstreams.rest;
   const challenge=createHash('sha256').update(codeVerifier).digest('base64url');
+
   const eligible=await fetch(`http://${rest.host}:${rest.port}/rpc/can_finish_public_registration`,{
     method:'POST',headers:{apikey:anon,authorization:`Bearer ${anon}`,'content-type':'application/json'},
     body:JSON.stringify({p_token:token,p_challenge:challenge}),redirect:'error',signal:AbortSignal.timeout(3500),
   });
 
-  if(!eligible.ok){await eligible.body?.cancel();return end(res,503);}
+  if(!eligible.ok){await eligible.body?.cancel();
+
+return end(res,503);}
+
   if(await eligible.json()!==true)return finishPage(res,409,unavailable);
   const {host,port}=upstreams.auth;
   const url=`http://${host}:${port}`;
@@ -361,12 +370,16 @@ async function finishSignup(req,res,query){
   const authCode=target.searchParams.get('code');
 
   if(verification.status!==303||target.origin!==origin||target.pathname!=='/auth/callback'||target.hash||target.searchParams.size!==2||target.searchParams.get('next')!==passwordPath||!uuid(authCode))return finishPage(res,409,unavailable);
+
   const exchange=await fetch(`${url}/token?grant_type=pkce`,{
     method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({auth_code:authCode,code_verifier:codeVerifier}),
     redirect:'error',signal:AbortSignal.timeout(8000),
   });
 
-  if(!exchange.ok){await exchange.body?.cancel();return finishPage(res,409,unavailable);}
+  if(!exchange.ok){await exchange.body?.cancel();
+
+return finishPage(res,409,unavailable);}
+
   const {access_token:accessToken}=await exchange.json();
   const bearer=`Bearer ${accessToken}`;
   const id=await session(bearer,{signupOnly:true});
@@ -375,17 +388,22 @@ async function finishSignup(req,res,query){
   try{
     if(!id||passwordWrites.has(id))return end(res,403);
     passwordWrites.add(id);
+
     try{
       if(!await session(bearer,{signupOnly:true}))return end(res,403);
+
       const update=await fetch(`${url}/user`,{method:'PUT',headers:{authorization:bearer,'content-type':'application/json'},
         body:JSON.stringify({password}),redirect:'error',signal:AbortSignal.timeout(8000)});
+
       await update.body?.cancel();
+
       if(!update.ok)return finishPage(res,409,'<p>Your email was verified, but the password could not be saved. Contact WACRM support.</p>');
     }finally{passwordWrites.delete(id);}
   }finally{
     if(isText(accessToken))await fetch(`${url}/logout?scope=local`,{method:'POST',headers:{authorization:bearer},
       redirect:'error',signal:AbortSignal.timeout(2000)}).then(r=>r.body?.cancel()).catch(()=>{});
   }
+
   res.setHeader('Location','/login');
 
   return end(res,303);
@@ -407,6 +425,7 @@ const server=createServer({maxHeaderSize:16_384,requestTimeout:8000,headersTimeo
 
     if(host===crm){
       if(registration&&path===finishPath)return await finishSignup(req,res,query);
+
       if(registration&&path==='/auth/callback'&&m==='GET'){
         res.setHeader('Referrer-Policy','no-referrer');
         const q=new URLSearchParams(query);
@@ -466,12 +485,14 @@ if(bytes>26000)return end(res,413);chunks.push(chunk);}
     if(registration&&path==='/auth/v1/verify'){
       if(m!=='GET')return end(res,404);
       const token=signupLink(query);
+
       if(!token)return end(res,404);
       res.setHeader('Referrer-Policy','no-referrer');
       res.setHeader('Location',`${origin}${finishPath}?token=${token}`);
 
       return end(res,303);
     }
+
     res.setHeader('Vary','Origin');
 
     if(req.headers.origin===origin){res.setHeader('Access-Control-Allow-Origin',origin);res.setHeader('Access-Control-Expose-Headers','Content-Range, Range-Unit, Preference-Applied');}

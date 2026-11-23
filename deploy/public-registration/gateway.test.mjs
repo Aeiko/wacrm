@@ -59,13 +59,17 @@ for await(const c of req)chunks.push(c);
     const raw=Buffer.concat(chunks).toString();
 
     if(req.url==='/rpc/can_confirm_public_registration')return res.end(JSON.stringify(JSON.parse(raw).p_token===link.get('token')));
+
     if(req.url==='/rpc/can_finish_public_registration'){
       const {p_token,p_challenge}=JSON.parse(raw);
+
       return res.end(JSON.stringify(p_token===link.get('token')&&p_challenge===createHash('sha256').update(verifierValue).digest('base64url')));
     }
+
     authCalls.push({url:req.url,method:req.method,body:raw&&JSON.parse(raw),authorization:req.headers.authorization});
 
     if(req.url==='/token?grant_type=pkce')return res.end(JSON.stringify({access_token:jwt('email/signup').slice(7)}));
+
     if(req.url==='/user'&&req.method==='GET')return res.end(JSON.stringify({id:code,role:'authenticated',aud:'authenticated',...current}));
 
     if(req.url==='/user'&&req.method==='PUT'){
@@ -138,8 +142,10 @@ return;}catch{await delay(40);}
     assert.equal(page.status,200);
     assert.match(page.body,/Verify email and set password/);
     assert.equal(authCalls.length,1,'GET must not touch GoTrue');
+
     const complete=(cookie, confirm=account.password)=>call(finish,{host:crm,method:'POST',headers:{...formHeaders,...(cookie&&{cookie})},
       body:new URLSearchParams({token:link.get('token'),password:account.password,confirm}).toString()});
+
     assert.equal((await complete(null)).status,409);
     assert.equal((await complete(verifierCookie('c'.repeat(56)))).status,409);
     assert.equal((await complete(verifierCookie(verifierValue),'different')).status,400);
