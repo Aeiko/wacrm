@@ -264,6 +264,31 @@ export async function captureCoexistenceWebhook(
 
   try {
     if (dedicated) {
+      if (changes.some(({ field }) => field === 'history')) {
+        const stops = changes.filter(({ field, value, invalid }) => {
+          if (invalid || field !== 'account_update') return false;
+
+          const parsed = z.object({
+            event: z.enum(['ACCOUNT_OFFBOARDED', 'PARTNER_REMOVED', 'PARTNER_APP_UNINSTALLED']),
+          }).safeParse(value);
+
+          return parsed.success;
+        });
+
+        if (stops.length) {
+          // Commit signed stop descriptors before history eligibility can roll back the batch.
+          const stopResult = strictResultSchema.safeParse(
+            await postPrivateIngress({ ...args, p_changes: stops })
+          );
+
+          if (!stopResult.success || stopResult.data.legacy_indices.length)
+            return failure(503, 'Invalid coexistence ingress result');
+
+          if (stopResult.data.status !== 200)
+            return failure(stopResult.data.status, 'Coexistence ingress rejected');
+        }
+      }
+
       result = strictResultSchema.safeParse(await postPrivateIngress(args));
     } else {
       const {

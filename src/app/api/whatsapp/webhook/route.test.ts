@@ -828,6 +828,52 @@ describe('dedicated receiver', () => {
     }
   });
 
+  it.each([true, false])('commits signed stops before rejected history (stop first: %s)', async (stopFirst) => {
+    vi.stubEnv('WHATSAPP_COEXISTENCE_PRIVATE_REST_ORIGIN', 'http://127.0.0.1:3902');
+    const stop = { field: 'account_update', value: { event: 'ACCOUNT_OFFBOARDED' } };
+    const history = { field: 'history', value: { history: [] } };
+    const changes = stopFirst ? [stop, history] : [history, stop];
+    const raw = JSON.stringify({ ...envelope, entry: [{ ...entry, changes }] });
+    const receipts = new Set<string>();
+    const calls: string[][] = [];
+
+    const server = createServer(async (req, res) => {
+      let body = '';
+
+      for await (const chunk of req) body += chunk;
+
+      const { p_changes } = JSON.parse(body);
+      const keys = p_changes.map(({ dedupe_key }: { dedupe_key: string }) => dedupe_key);
+      calls.push(keys);
+
+      const denied = p_changes.some(({ field }: { field: string }) => field === 'history');
+
+      if (!denied) for (const key of keys) receipts.add(key);
+
+      res.end(JSON.stringify({ status: denied ? 403 : 200, legacy_indices: [], captured: 0, staged: 0 }));
+    });
+
+    server.listen(3902, '127.0.0.1');
+
+    try {
+      await once(server, 'listening');
+      expect((await POST(signedPost(raw, 'legacy-secret'))).status).toBe(401);
+      expect(calls).toEqual([]);
+
+      for (let attempt = 0; attempt < 2; attempt++) {
+        expect((await POST(signedPost(raw, 'dedicated-secret'))).status).toBe(403);
+      }
+
+      expect(calls).toHaveLength(4);
+      expect(calls[0]).toEqual([calls[1][stopFirst ? 0 : 1]]);
+      expect(calls.slice(2)).toEqual(calls.slice(0, 2));
+      expect([...receipts]).toEqual(calls[0]);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
   it('uses the pinned RPC for both batch shapes and counts only accepted receipts as committed', async () => {
     const info = vi.spyOn(postOutcomes, 'count').mockImplementation(() => {});
     vi.stubEnv(
