@@ -7,6 +7,7 @@ it.each(['ok', 'wrong grant', 'wrong phone', 'missing receiver'])(
   async (scenario) => {
     const target = {
       appId: '123',
+      loginConfigId: '456',
       partnerId: '456',
       wabaId: '777',
       phoneNumberId: '888',

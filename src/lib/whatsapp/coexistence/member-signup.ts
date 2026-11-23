@@ -88,7 +88,12 @@ export async function memberSignup(
   request: Request,
   db: SupabaseClient,
   transport: CoexistenceFetch = memberGraphTransport,
-  reviewReceiver?: MemberReceiverReview
+  reviewReceiver?: MemberReceiverReview,
+  reviewRouting?: (pins: {
+    appId: string;
+    loginConfigId: string;
+    partnerId: string;
+  }) => Promise<boolean>
 ) {
   const url = new URL(request.url);
   const post = request.method === 'POST';
@@ -156,7 +161,16 @@ export async function memberSignup(
         const activationEnabled = () =>
           process.env.WHATSAPP_COEXISTENCE_MEMBER_ACTIVATION_ENABLED === 'true';
 
-        const rpc = async <Action extends Parameters<typeof memberSignupRpc>[1]>(
+        const routingReady = () =>
+          reviewRouting?.({
+            appId: pins.app_id,
+            loginConfigId: pins.login_config_id,
+            partnerId: pins.partner_id,
+          });
+
+        const rpc = async <
+          Action extends Parameters<typeof memberSignupRpc>[1],
+        >(
           action: Action,
           payload: Parameters<typeof memberSignupRpc<Action>>[2]
         ) => {
@@ -192,6 +206,13 @@ export async function memberSignup(
         if (!post) {
           const { status } = await rpc('inspect', {});
 
+          if (
+            status === 'available' &&
+            reviewRouting &&
+            (!activationEnabled() || !(await routingReady()))
+          )
+            return json({ status: 'unavailable', workspace });
+
           if (status === 'available')
             return json({
               status,
@@ -210,6 +231,9 @@ export async function memberSignup(
         }
 
         const command = await readSignupBody(request, signal, commandSchema);
+
+        if (reviewRouting && (!activationEnabled() || !(await routingReady())))
+          throw signupError(409);
 
         if (command.action === 'launch') {
           const launched = z
@@ -276,6 +300,7 @@ export async function memberSignup(
             const expiresAt = await verifyMemberActivationEvidence(
               {
                 appId: pins.app_id,
+                loginConfigId: pins.login_config_id,
                 partnerId: pins.partner_id,
                 wabaId: target.waba_id,
                 phoneNumberId: target.phone_number_id,
@@ -331,6 +356,12 @@ export async function memberSignup(
         if (!start.success) throw signupError(409);
 
         const authorized: CoexistenceFetch = async (target, init) => {
+          if (
+            reviewRouting &&
+            (!activationEnabled() || !(await routingReady()))
+          )
+            throw signupError(409);
+
           if (
             (await rpc('exchange_authorized', { ...pins, state })).status !==
             'authorized'

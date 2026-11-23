@@ -36,6 +36,8 @@ function allowed(url: URL, authorization: string | null) {
 
   if (path === 'debug_token') return hasExactKeys('input_token');
 
+  if (/^[1-9]\d{0,31}\/subscribed_apps$/.test(path)) return query.size === 0;
+
   if (!asset.test(path)) return false;
 
   if (path.endsWith('/phone_numbers')) {

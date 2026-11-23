@@ -389,6 +389,50 @@ export async function verifyCoexistencePhone(
   };
 }
 
+const subscriptionList = z.object({
+  data: z
+    .array(
+      z.object({
+        whatsapp_business_api_data: z.object({ id: metaIdSchema }),
+        override_callback_uri: z.string().optional(),
+      })
+    )
+    .max(100),
+  paging: z.object({ next: z.string().optional() }).optional(),
+});
+
+export async function memberSubscriptionMatches(
+  target: { wabaId: string; appId: string; callback: string },
+  accessToken: string,
+  transport: CoexistenceFetch,
+  signal: AbortSignal
+) {
+  const url = graphUrl(`${metaIdSchema.parse(target.wabaId)}/subscribed_apps`);
+
+  const subscription = await request(
+    url,
+    {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${accessToken}` },
+      signal,
+    },
+    subscriptionList,
+    transport
+  );
+
+  const ours = subscription.data.filter(
+    ({ whatsapp_business_api_data }) =>
+      whatsapp_business_api_data.id === target.appId
+  );
+
+  return (
+    !subscription.paging?.next &&
+    ours.length === 1 &&
+    (ours[0].override_callback_uri === undefined ||
+      ours[0].override_callback_uri === target.callback)
+  );
+}
+
 export interface ValidateCoexistenceTokenArgs {
   signal?: AbortSignal;
   expectedAppId: string;

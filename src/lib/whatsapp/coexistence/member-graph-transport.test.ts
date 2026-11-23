@@ -31,6 +31,7 @@ beforeEach(() => request.mockReset());
 it.each([
   [exchange, undefined],
   [`${base}/debug_token?input_token=fixture`, headers],
+  [`${base}/123/subscribed_apps`, headers],
   [`${base}/123/phone_numbers?fields=id%2Cdisplay_phone_number`, headers],
   [
     `${base}/123/phone_numbers?fields=id%2Cdisplay_phone_number&after=page`,
@@ -84,7 +85,8 @@ it.each([
   [exchange, get({ signal: AbortSignal.abort() })],
   [exchange, get({ headers })],
   [`${base}/debug_token?input_token=fixture`, get()],
-  [`${base}/123/subscribed_apps`, get({ headers })],
+  [`${base}/123/subscribed_apps`, get({ headers, method: 'POST' })],
+  [`${base}/123/subscribed_apps?after=page`, get({ headers })],
   [
     `${base}/123/phone_numbers?fields=id%2Cdisplay_phone_number&access_token=extra`,
     get({ headers }),

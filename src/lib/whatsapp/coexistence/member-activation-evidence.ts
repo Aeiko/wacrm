@@ -7,6 +7,7 @@ import {
 export type MemberActivationTarget = {
   appId: string;
   partnerId: string;
+  loginConfigId: string;
   wabaId: string;
   phoneNumberId: string;
   intendedPhone: string;
@@ -16,7 +17,8 @@ export type MemberActivationTarget = {
 // including current stop coverage, for this exact pair. Never source this from the form.
 export type MemberReceiverReview = (
   target: MemberActivationTarget,
-  signal: AbortSignal
+  signal: AbortSignal,
+  context: { accessToken: string; transport: CoexistenceFetch }
 ) => Promise<boolean>;
 
 export async function verifyMemberActivationEvidence(
@@ -66,7 +68,9 @@ export async function verifyMemberActivationEvidence(
   if (phone.phoneNumberId !== target.phoneNumberId)
     throw new Error('Activation phone changed');
 
-  if ((await reviewReceiver(target, signal)) !== true)
+  if (
+    (await reviewReceiver(target, signal, { accessToken, transport })) !== true
+  )
     throw new Error('Activation receiver evidence unavailable');
 
   signal.throwIfAborted();
