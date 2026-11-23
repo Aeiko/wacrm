@@ -15,7 +15,11 @@ import {
   verifyCoexistencePhone,
   type CoexistenceFetch,
 } from '../coexistence-meta';
-import { encrypt } from '../encryption';
+import { decrypt, encrypt } from '../encryption';
+import {
+  verifyMemberActivationEvidence,
+  type MemberReceiverReview,
+} from './member-activation-evidence';
 import {
   hasSignupCookieCredentials,
   readSignupBody,
@@ -54,6 +58,13 @@ const commandSchema = z.discriminatedUnion('action', [
     waba_id: id,
     phone_number_id: id,
   }),
+  z.strictObject({
+    action: z.literal('activate'),
+    state: z.uuid(),
+    waba_id: id,
+    phone_number_id: id,
+    normalized_phone_number: signupPhoneSchema,
+  }),
 ]);
 
 function config() {
@@ -76,7 +87,8 @@ function config() {
 export async function memberSignup(
   request: Request,
   db: SupabaseClient,
-  transport: CoexistenceFetch = memberGraphTransport
+  transport: CoexistenceFetch = memberGraphTransport,
+  reviewReceiver?: MemberReceiverReview
 ) {
   const url = new URL(request.url);
   const post = request.method === 'POST';
@@ -140,6 +152,9 @@ export async function memberSignup(
             : json({ status: 'unavailable', workspace });
 
         const { secret, ...pins } = settings;
+
+        const activationEnabled = () =>
+          process.env.WHATSAPP_COEXISTENCE_MEMBER_ACTIVATION_ENABLED === 'true';
 
         const rpc = async <Action extends Parameters<typeof memberSignupRpc>[1]>(
           action: Action,
@@ -221,7 +236,78 @@ export async function memberSignup(
 
           if (selection.status !== 'confirmed') throw signupError(409);
 
-          return json({ status: 'confirmed' });
+          return reviewReceiver && activationEnabled()
+            ? json({ status: 'confirmed', activation_available: true })
+            : json({ status: 'confirmed' });
+        }
+
+        if (command.action === 'activate') {
+          if (!reviewReceiver || !activationEnabled()) throw signupError(404);
+
+          const target = {
+            ...pins,
+            state: command.state,
+            waba_id: command.waba_id,
+            phone_number_id: command.phone_number_id,
+          };
+
+          const credential = await rpc('activation_read', target);
+
+          if (
+            credential.status !== 'activation_ready' ||
+            credential.normalized_phone_number !==
+              command.normalized_phone_number
+          )
+            throw signupError(409);
+
+          try {
+            const authorized: CoexistenceFetch = async (url, init) => {
+              const current = await rpc('activation_read', target);
+
+              if (
+                current.status !== 'activation_ready' ||
+                current.access_token !== credential.access_token
+              )
+                throw signupError(409);
+
+              return transport(url, init);
+            };
+
+            const expiresAt = await verifyMemberActivationEvidence(
+              {
+                appId: pins.app_id,
+                partnerId: pins.partner_id,
+                wabaId: target.waba_id,
+                phoneNumberId: target.phone_number_id,
+                intendedPhone: credential.normalized_phone_number,
+              },
+              decrypt(credential.access_token),
+              `${pins.app_id}|${secret}`,
+              authorized,
+              reviewReceiver,
+              signal
+            );
+
+            if (
+              Date.parse(expiresAt) < Date.parse(credential.token_expires_at) ||
+              process.env.WHATSAPP_COEXISTENCE_MEMBER_ACTIVATION_ENABLED !==
+                'true'
+            )
+              throw signupError(409);
+
+            const result = await rpc('activate', {
+              ...target,
+              normalized_phone_number: credential.normalized_phone_number,
+            });
+
+            if (result.status !== 'activated') throw signupError(409);
+
+            return json({ status: 'activated' });
+          } catch {
+            // Revoke only the staged credential; never undo a committed activation on an ambiguous reply.
+            await rpc('activation_abort', target).catch(() => {});
+            throw signupError(409);
+          }
         }
 
         const state = command.state;

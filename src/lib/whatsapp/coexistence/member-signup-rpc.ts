@@ -25,6 +25,9 @@ const payloads = {
     access_token: z.string().max(16_384).regex(/^[a-f0-9]{24}:([a-f0-9]{2})+:[a-f0-9]{32}$/),
   }),
   confirm: z.strictObject(selection),
+  activation_read: z.strictObject(selection),
+  activation_abort: z.strictObject(selection),
+  activate: z.strictObject({ ...selection, normalized_phone_number: signupPhoneSchema }),
 };
 
 const results = {
@@ -34,6 +37,14 @@ const results = {
   exchange_authorized: z.strictObject({ status: z.literal('authorized') }),
   verify: z.strictObject({ status: z.literal('verified') }),
   confirm: z.strictObject({ status: z.literal('confirmed') }),
+  activation_read: z.strictObject({
+    status: z.literal('activation_ready'),
+    access_token: z.string().max(16_384).regex(/^[a-f0-9]{24}:([a-f0-9]{2})+:[a-f0-9]{32}$/),
+    token_expires_at: z.iso.datetime({ offset: true }),
+    normalized_phone_number: signupPhoneSchema,
+  }).or(z.strictObject({ status: z.literal('activated') })),
+  activation_abort: z.strictObject({ status: z.literal('activation_aborted') }),
+  activate: z.strictObject({ status: z.literal('activated') }),
 };
 
 const negative = z.strictObject({
@@ -103,7 +114,7 @@ export async function memberSignupRpc<Action extends keyof typeof payloads>(
         incoming.on('data', (chunk: Buffer) => {
           size += chunk.length;
 
-          if (size > 1024) {
+          if (size > (action === 'activation_read' ? 17_408 : 1024)) {
             incoming.destroy();
             reject(new Error());
           } else {

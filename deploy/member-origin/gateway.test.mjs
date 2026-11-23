@@ -300,7 +300,27 @@ test('permanent member gateway retains independent registration, member, and rep
       'no-store'
     );
 
+    const activation = {
+      action: 'activate',
+      state: id,
+      waba_id: '1234',
+      phone_number_id: '2345',
+      normalized_phone_number: '+12025550124',
+    };
+
+    await status(
+      400,
+      action,
+      post({ ...activation, normalized_phone_number: '0124' }, postHeaders)
+    );
+    await status(
+      400,
+      action,
+      post({ ...activation, access_token: 'not-allowed' }, postHeaders)
+    );
+
     for (const command of [
+      activation,
       launch,
       { action: 'finish', state: id, code: 'fixture-code' },
       {

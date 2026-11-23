@@ -45,6 +45,37 @@ function render(view: Awaited<ReturnType<typeof advanceDiscovery>>) {
   );
 }
 
+it('requires a separate activation click after confirmation and sends the exact preview', async () => {
+  const fetch = mockServer(
+    Response.json({ status: 'confirmed', activation_available: true }),
+    Response.json({ status: 'activated' })
+  );
+
+  const signal = AbortSignal.timeout(5000);
+
+  const confirmed = await advanceDiscovery(
+    { ...verified, status: 'verified', state: launch.state },
+    vi.fn(),
+    signal
+  );
+
+  expect(render(confirmed)).toContain(`Verified WhatsApp number: ${number}`);
+  expect(render(confirmed)).toContain(launch.workspace);
+  expect(render(confirmed)).toContain('Activate WhatsApp connection');
+  expect(fetch).toHaveBeenCalledTimes(1);
+
+  const active = await advanceDiscovery(confirmed, vi.fn(), signal);
+
+  expect(render(active)).toContain('WhatsApp connection active');
+  expect(fetch.mock.calls[1]?.[1]?.body).toBe(
+    JSON.stringify({
+      action: 'activate',
+      state: launch.state,
+      ...verified.preview,
+    })
+  );
+});
+
 it('does not launch or open the provider on initial render', () => {
   const fetch = mockServer();
   const openProvider = vi.fn();
@@ -103,7 +134,9 @@ it('opens, verifies and confirms in separate steps with only the code and server
   expect(fetch).toHaveBeenCalledTimes(2);
 
   const confirmed = await advanceDiscovery(preview, openProvider, signal);
-  expect(render(confirmed)).toContain('Number confirmed.');
+  expect(render(confirmed)).toContain(
+    'Number confirmed. The connection is pending and is not active.'
+  );
   expect(render(confirmed)).not.toContain('<button');
   expect(fetch.mock.calls).toEqual(
     [

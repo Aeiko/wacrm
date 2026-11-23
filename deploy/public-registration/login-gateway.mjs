@@ -210,6 +210,9 @@ function memberBody(raw){
   if(action==='confirm'&&Object.keys(p).length===4&&[waba_id,phone_number_id].every(v=>isText(v)&&/^[1-9]\d{0,31}$/.test(v)))
     return Buffer.from(JSON.stringify({action,state,waba_id,phone_number_id}));
 
+  if(action==='activate'&&Object.keys(p).length===5&&[waba_id,phone_number_id].every(v=>isText(v)&&/^[1-9]\d{0,31}$/.test(v))&&isText(p.normalized_phone_number)&&/^\+[1-9]\d{7,14}$/.test(p.normalized_phone_number))
+    return Buffer.from(JSON.stringify({action,state,waba_id,phone_number_id,normalized_phone_number:p.normalized_phone_number}));
+
   return null;
 }
 

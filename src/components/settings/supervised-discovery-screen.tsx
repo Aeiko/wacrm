@@ -28,10 +28,15 @@ const verifiedSchema = z.object({
   }),
 });
 
-const confirmedSchema = z.object({ status: z.literal('confirmed') });
+const confirmedSchema = z.object({
+  status: z.literal('confirmed'),
+  activation_available: z.literal(true).optional(),
+});
+
+const activatedSchema = z.object({ status: z.literal('activated') });
 
 type View =
-  | { status: 'stopped' | 'cancelled' | 'confirmed' }
+  | { status: 'stopped' | 'cancelled' | 'confirmed' | 'activated' }
   | { status: 'idle'; workspace: string }
   | (z.infer<typeof launchSchema> & { intendedPhone: string })
   | {
@@ -41,7 +46,10 @@ type View =
       intendedPhone: string;
       code: string;
     }
-  | (z.infer<typeof verifiedSchema> & { state: string });
+  | (Omit<z.infer<typeof verifiedSchema>, 'status'> & {
+      status: 'verified' | 'activation_available';
+      state: string;
+    });
 
 type Command =
   | { action: 'launch'; intended_phone: string }
@@ -51,6 +59,13 @@ type Command =
       state: string;
       waba_id: string;
       phone_number_id: string;
+    }
+  | {
+      action: 'activate';
+      state: string;
+      waba_id: string;
+      phone_number_id: string;
+      normalized_phone_number: string;
     };
 
 async function post<T>(
@@ -129,12 +144,23 @@ export async function advanceDiscovery(
       case 'verified': {
         const { waba_id, phone_number_id } = view.preview;
 
-        return await post(
+        const receipt = await post(
           { action: 'confirm', state: view.state, waba_id, phone_number_id },
           confirmedSchema,
           signal
         );
+
+        return receipt.activation_available
+          ? { ...view, status: 'activation_available' }
+          : { status: 'confirmed' };
       }
+
+      case 'activation_available':
+        return await post(
+          { action: 'activate', state: view.state, ...view.preview },
+          activatedSchema,
+          signal
+        );
 
       default:
         return view;
@@ -150,6 +176,7 @@ const controls: Partial<Record<View['status'], string>> = {
   launch_authorized: 'Open WhatsApp signup',
   code_ready: 'Verify selected number',
   verified: 'Confirm verified number',
+  activation_available: 'Activate WhatsApp connection',
 };
 
 export function SupervisedDiscoveryScreen({
@@ -215,13 +242,25 @@ export function DiscoveryPanel({
         the connection or start an import.
       </p>
       <div role="status">
-        {view.status === 'verified' ? (
+        {view.status === 'activated' ? (
+          <p>
+            WhatsApp connection active. No history or contacts import was
+            enabled.
+          </p>
+        ) : null}
+        {view.status === 'activation_available' ? (
+          <p>Destination workspace: {view.workspace}</p>
+        ) : null}
+        {view.status === 'verified' ||
+        view.status === 'activation_available' ? (
           <p>
             Verified WhatsApp number: {view.preview.normalized_phone_number}
           </p>
         ) : null}
         {busy ? <p>Waiting for this step to finish…</p> : null}
-        {view.status === 'confirmed' ? <p>Number confirmed.</p> : null}
+        {view.status === 'confirmed' ? (
+          <p>Number confirmed. The connection is pending and is not active.</p>
+        ) : null}
         {view.status === 'cancelled' ? (
           <p>WhatsApp signup was cancelled. Contact your operator.</p>
         ) : null}
