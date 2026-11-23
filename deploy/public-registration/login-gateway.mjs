@@ -308,10 +308,12 @@ function signupVerifier(req){
 }
 
 function finishPage(res,status,content){
-  res.setHeader('Content-Security-Policy',"default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'");
+  const scrub="history.replaceState(null, '', location.pathname);";
+  const scriptHash=createHash('sha256').update(scrub).digest('base64');
+  res.setHeader('Content-Security-Policy',`default-src 'none'; script-src 'sha256-${scriptHash}'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`);
   res.writeHead(status,{'Content-Type':'text/html; charset=utf-8'});
 
-  return res.end(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WACRM � Set your password</title><style>:root{color-scheme:light dark;font:1rem system-ui}body{margin:0;min-height:100vh;display:grid;place-items:center;background:Canvas;color:CanvasText}main{box-sizing:border-box;width:min(94vw,28rem);padding:2rem;border:1px solid GrayText;border-radius:1rem}form,label{display:grid;gap:.5rem}form{gap:1rem}input,button{font:inherit;padding:.65rem;border-radius:.5rem}button{cursor:pointer}</style><main><strong>WACRM</strong><h1>Set your password</h1>${content}</main></html>`);
+  return res.end(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WACRM � Set your password</title><script>${scrub}</script><style>:root{color-scheme:light dark;font:1rem system-ui}body{margin:0;min-height:100vh;display:grid;place-items:center;background:Canvas;color:CanvasText}main{box-sizing:border-box;width:min(94vw,28rem);padding:2rem;border:1px solid GrayText;border-radius:1rem}form,label{display:grid;gap:.5rem}form{gap:1rem}input,button{font:inherit;padding:.65rem;border-radius:.5rem}button{cursor:pointer}</style><main><strong>WACRM</strong><h1>Set your password</h1>${content}</main></html>`);
 }
 
 async function finishSignup(req,res,query){
