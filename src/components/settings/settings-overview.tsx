@@ -33,8 +33,10 @@ interface WhatsAppStatus {
 
 export function SettingsOverview({
   onSelect,
+  hideWhatsAppStatus,
 }: {
   onSelect: (section: SettingsSection) => void;
+  hideWhatsAppStatus: boolean;
 }) {
   const {
     user,
@@ -140,7 +142,7 @@ export function SettingsOverview({
     })();
 
     // WhatsApp connection status — slower, independent.
-    (async () => {
+    if (!hideWhatsAppStatus) void (async () => {
       setWhatsappLoading(true);
 
       const [row, health] = await Promise.allSettled([
@@ -166,7 +168,7 @@ export function SettingsOverview({
     return () => {
       cancelled = true;
     };
-  }, [user?.id, accountId, canManageMembers]);
+  }, [user?.id, accountId, canManageMembers, hideWhatsAppStatus]);
 
   const displayName = profile?.full_name || profile?.email || t('yourAccount');
 
@@ -193,8 +195,10 @@ export function SettingsOverview({
   }[] = [
     {
       section: 'whatsapp',
-      loading: whatsappLoading,
-      subtitle: !whatsapp?.configured ? (
+      loading: !hideWhatsAppStatus && whatsappLoading,
+      subtitle: hideWhatsAppStatus ? (
+        'New connections are not available yet.'
+      ) : !whatsapp?.configured ? (
         t('notSetup')
       ) : whatsapp.connected ? (
         <>

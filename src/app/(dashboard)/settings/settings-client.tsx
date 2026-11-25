@@ -85,16 +85,16 @@ function SettingsPageInner({
   const panel: Record<SettingsSection, ReactNode> = {
     overview: (
       <>
-        {memberSignupEnabled && (
+        {!launchPreview && memberSignupEnabled && (
           <Link
             href="/settings/connect-whatsapp"
             prefetch={false}
             className={buttonVariants({ variant: 'outline', className: 'mb-4' })}
           >
-            {launchPreview ? 'Preview setup' : 'Connect WhatsApp'}
+            Connect WhatsApp
           </Link>
         )}
-        <SettingsOverview onSelect={go} />
+        <SettingsOverview onSelect={go} hideWhatsAppStatus={launchPreview} />
       </>
     ),
     profile: <ProfileForm />,
@@ -102,10 +102,8 @@ function SettingsPageInner({
     appearance: <AppearancePanel />,
     whatsapp: launchPreview ? (
       <section aria-labelledby="whatsapp-connection-heading" className="max-w-xl space-y-3">
-        <h2 id="whatsapp-connection-heading" className="text-lg font-semibold">WhatsApp connection</h2>
-        <Link href="/settings/connect-whatsapp" prefetch={false} className={buttonVariants({ variant: 'outline' })}>
-          Preview setup
-        </Link>
+        <h2 id="whatsapp-connection-heading" className="text-lg font-semibold">WhatsApp</h2>
+        <p className="text-muted-foreground text-sm">New connections are not available yet.</p>
       </section>
     ) : (
       <WhatsAppConfig historyRequestEnabled={historyRequestEnabled} />
