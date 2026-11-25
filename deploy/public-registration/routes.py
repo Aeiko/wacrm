@@ -5,7 +5,7 @@ import json
 import sys
 
 
-def build(cidrs, gateway='http://172.29.124.8:8080', inert=False):
+def build(cidrs, gateway='http://172.29.124.8:8080', inert=False, root_only=False):
     nets = [ipaddress.ip_network(cidr) for cidr in cidrs]
     if not (10 <= len(nets) <= 100 and len(set(nets)) == len(nets)
             and {net.version for net in nets} == {4, 6}
@@ -14,6 +14,21 @@ def build(cidrs, gateway='http://172.29.124.8:8080', inert=False):
     name = 'wacrm-registration-v1-'
     peer = '(' + ' || '.join(f'ClientIP(`{net}`)' for net in nets) + ')'
     crm = 'Host(`wacrm.sqkii.land`)'
+    if root_only:
+        name = 'wacrm-public-root-v1'
+        return {'http': {
+            'routers': {name: {
+                'rule': f'{crm} && Path(`/`) && (Method(`GET`) || Method(`HEAD`)) && {peer}',
+                'entryPoints': ['websecure'], 'tls': {}, 'priority': 21100,
+                'service': 'noop@internal', 'middlewares': [name],
+                'observability': {'accessLogs': False, 'tracing': False},
+            }},
+            'middlewares': {name: {'redirectRegex': {
+                'regex': r'^https://wacrm\.sqkii\.land/(\?.*)?$',
+                'replacement': 'https://wacrm.sqkii.land/login',
+                'permanent': False,
+            }}},
+        }}
     api = 'Host(`wacrm-api.sqkii.land`)'
     private = 'ClientIP(`172.29.124.9/32`)'
     routes, limits = {}, {}
@@ -45,10 +60,11 @@ def build(cidrs, gateway='http://172.29.124.8:8080', inert=False):
 
 
 if __name__ == '__main__':
-    if sys.argv[1:] not in (['inert'], ['live']):
-        sys.exit('usage: routes.py [inert|live] < cloudflare-ips.json')
+    if sys.argv[1:] not in (['inert'], ['live'], ['root']):
+        sys.exit('usage: routes.py [inert|live|root] < cloudflare-ips.json')
     result = json.load(sys.stdin)
     if result.get('success') is not True:
         sys.exit('Cloudflare CIDR fetch failed')
     ips = result['result']
-    print(json.dumps(build(ips['ipv4_cidrs'] + ips['ipv6_cidrs'], inert=sys.argv[1] == 'inert'), indent=2))
+    print(json.dumps(build(ips['ipv4_cidrs'] + ips['ipv6_cidrs'], inert=sys.argv[1] == 'inert',
+                           root_only=sys.argv[1] == 'root'), indent=2))
