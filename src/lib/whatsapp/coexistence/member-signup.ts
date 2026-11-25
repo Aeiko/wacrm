@@ -316,8 +316,8 @@ export async function memberSignup(
 
             if (
               Date.parse(expiresAt) < Date.parse(credential.token_expires_at) ||
-              process.env.WHATSAPP_COEXISTENCE_MEMBER_ACTIVATION_ENABLED !==
-                'true'
+              !activationEnabled() ||
+              (reviewRouting && !(await routingReady()))
             )
               throw signupError(409);
 
@@ -423,6 +423,9 @@ export async function memberSignup(
             phone_number_id: phone.phoneNumberId,
             normalized_phone_number: `+${phone.normalizedPhoneNumber}`,
           };
+
+          if (reviewRouting && (!activationEnabled() || !(await routingReady())))
+            throw signupError(409);
 
           const verified = await rpc('verify', {
             ...pins,
