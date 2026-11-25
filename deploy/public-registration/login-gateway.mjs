@@ -166,7 +166,10 @@ return [];}
 }
 
 function end(res,status){res.writeHead(status);res.end();}
-function redirectLogin(res){res.setHeader('Location','/login');return end(res,303);}
+
+function redirectLogin(res){res.setHeader('Location','/login');
+
+return end(res,303);}
 
 function pass(req,res,{host,port},path,keys,body,{method=req.method,memberRoute=false,timeout=8000}={}){
   const forward={};
@@ -243,6 +246,7 @@ async function memberRequest(req,res,path,query){
 
   if(post&&Number(h['content-length'])>40*1024)return end(res,413);
   const bearer=cookieBearer(req);
+
   if(page&&query===undefined&&!bearer)return redirectLogin(res);
   const id=await session(bearer,{confirmed:memberPreview});
 
@@ -512,9 +516,13 @@ if(bytes>26000)return end(res,413);chunks.push(chunk);}
         const bearer=cookieBearer(req);
 
         const params=new URLSearchParams(query);
+
         if(settings&&!params.has('_rsc')&&!bearer)return redirectLogin(res);
 
-        if(!await membership(await session(bearer),bearer,signupStatus||params.get('tab')==='whatsapp'))return end(res,403);
+        const whatsapp=settings&&params.get('tab')==='whatsapp';
+        const preview=memberPreview&&whatsapp;
+
+        if(!await membership(await session(bearer,{confirmed:preview}),bearer,signupStatus||(whatsapp&&!preview)))return end(res,403);
 
         if(signupStatus){
           res.writeHead(503,{'Content-Type':'application/json; charset=utf-8'});

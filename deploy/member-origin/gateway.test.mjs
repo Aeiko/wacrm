@@ -209,6 +209,7 @@ test('permanent member gateway retains independent registration, member, and rep
     await status(404, '/signup');
     await stop();
     await start({ LOGIN_MEMBER_LAUNCH_PREVIEW: 'true' });
+
     for (const path of ['/settings', page]) {
       for (const method of ['GET', 'HEAD']) {
         const result = await call(path, { method });
@@ -216,16 +217,22 @@ test('permanent member gateway retains independent registration, member, and rep
         assert.equal(result.headers.location, '/login');
         assert.equal(result.headers['cache-control'], 'no-store');
       }
+
       await status(200, path, { headers: { cookie } });
     }
+
     await status(404, '/settings?return=https://other.fixture.invalid');
     await status(401, page + '?_rsc=fixture');
     await status(404, '/settings', post(launch));
     await status(403, '/api/whatsapp/coexistence/signup');
     confirmed = false;
     await status(401, page, { headers: { cookie } });
+    await status(403, '/settings?tab=whatsapp', { headers: { cookie } });
     confirmed = true;
     await status(200, page, { headers: { cookie } });
+    await status(200, '/settings?tab=whatsapp', { headers: { cookie } });
+    await status(200, '/settings?tab=whatsapp&_rsc=fixture', { headers: { cookie } });
+    await status(403, '/api/whatsapp/coexistence/signup', { headers: { cookie } });
     await status(404, page, post(launch));
     await status(404, action, post({ action: 'activate' }));
     await status(404, action, post({ action: 'finish', code: 'discarded' }));
@@ -233,6 +240,7 @@ test('permanent member gateway retains independent registration, member, and rep
     const initialProfiles = profiles;
     profiles = [];
     await status(403, page, { headers: { cookie } });
+    await status(403, '/settings?tab=whatsapp', { headers: { cookie } });
     profiles = initialProfiles;
     await stop();
     await start({
