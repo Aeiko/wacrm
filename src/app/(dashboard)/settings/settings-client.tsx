@@ -37,6 +37,7 @@ import {
 type SettingsFlags = {
   historyRequestEnabled: boolean;
   memberSignupEnabled: boolean;
+  launchPreview: boolean;
 };
 
 export function SettingsClient(flags: SettingsFlags) {
@@ -50,6 +51,7 @@ export function SettingsClient(flags: SettingsFlags) {
 function SettingsPageInner({
   historyRequestEnabled,
   memberSignupEnabled,
+  launchPreview,
 }: SettingsFlags) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -98,7 +100,16 @@ function SettingsPageInner({
     profile: <ProfileForm />,
     security: <SecurityPanel />,
     appearance: <AppearancePanel />,
-    whatsapp: <WhatsAppConfig historyRequestEnabled={historyRequestEnabled} />,
+    whatsapp: launchPreview ? (
+      <section aria-label="WhatsApp launch-only test" className="space-y-3">
+        <p>This test opens the first Meta screen only. It does not connect a WhatsApp account. Close the popup at that screen without continuing.</p>
+        <Link href="/settings/connect-whatsapp" prefetch={false} className={buttonVariants({ variant: 'outline' })}>
+          Connect WhatsApp
+        </Link>
+      </section>
+    ) : (
+      <WhatsAppConfig historyRequestEnabled={historyRequestEnabled} />
+    ),
     templates: <TemplateManager />,
     'quick-replies': <QuickRepliesManager />,
     fields: <FieldsAndTagsPanel />,
