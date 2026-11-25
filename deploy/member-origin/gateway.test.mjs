@@ -209,7 +209,19 @@ test('permanent member gateway retains independent registration, member, and rep
     await status(404, '/signup');
     await stop();
     await start({ LOGIN_MEMBER_LAUNCH_PREVIEW: 'true' });
-    await status(401, page);
+    for (const path of ['/settings', page]) {
+      for (const method of ['GET', 'HEAD']) {
+        const result = await call(path, { method });
+        assert.equal(result.status, 303, path);
+        assert.equal(result.headers.location, '/login');
+        assert.equal(result.headers['cache-control'], 'no-store');
+      }
+      await status(200, path, { headers: { cookie } });
+    }
+    await status(404, '/settings?return=https://other.fixture.invalid');
+    await status(401, page + '?_rsc=fixture');
+    await status(404, '/settings', post(launch));
+    await status(403, '/api/whatsapp/coexistence/signup');
     confirmed = false;
     await status(401, page, { headers: { cookie } });
     confirmed = true;
