@@ -27,10 +27,10 @@ export default async function ConnectWhatsAppPage() {
   return (
     <div className="max-w-xl space-y-4">
       <Link href="/settings?tab=whatsapp" className="text-sm underline">
-        Back to WhatsApp settings
+        {preview ? 'Back to WhatsApp' : 'Back to WhatsApp settings'}
       </Link>
       <h1 className="text-foreground text-2xl font-bold tracking-tight">
-        Connect WhatsApp
+        {preview ? 'WhatsApp setup' : 'Connect WhatsApp'}
       </h1>
       {preview ? <LaunchOnlyWhatsApp appId={appId} configId={configId} /> : <DiscoveryClient />}
     </div>

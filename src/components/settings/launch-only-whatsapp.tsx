@@ -21,15 +21,14 @@ export function LaunchOnlyWhatsApp({ appId, configId }: { appId: string; configI
 
   return (
     <section className="space-y-3">
-      <p>This test only opens the first Meta screen. Close the popup at that screen. Do not continue, grant permissions, select a business or phone number, or scan a QR code.</p>
-      <p>No WhatsApp connection will be saved by WACRM.</p>
+      <p className="text-muted-foreground text-sm">Close the Meta window before continuing. This preview won’t connect your account.</p>
       <Button type="button" disabled={!sdk || opened} onClick={() => {
         if (!sdk || opened) return;
         setOpened(true);
 
         try { openDiscoveryPreview(sdk, appId, configId); }
         catch { setFailed(true); }
-      }}>Open Meta for a launch-only test</Button>
+      }}>Open Meta</Button>
       {failed ? <p role="status">Meta could not be opened. Reload to try again.</p> : null}
     </section>
   );

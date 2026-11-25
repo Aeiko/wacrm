@@ -91,7 +91,7 @@ function SettingsPageInner({
             prefetch={false}
             className={buttonVariants({ variant: 'outline', className: 'mb-4' })}
           >
-            Connect WhatsApp
+            {launchPreview ? 'Preview setup' : 'Connect WhatsApp'}
           </Link>
         )}
         <SettingsOverview onSelect={go} />
@@ -101,10 +101,10 @@ function SettingsPageInner({
     security: <SecurityPanel />,
     appearance: <AppearancePanel />,
     whatsapp: launchPreview ? (
-      <section aria-label="WhatsApp launch-only test" className="space-y-3">
-        <p>This test opens the first Meta screen only. It does not connect a WhatsApp account. Close the popup at that screen without continuing.</p>
+      <section aria-labelledby="whatsapp-connection-heading" className="max-w-xl space-y-3">
+        <h2 id="whatsapp-connection-heading" className="text-lg font-semibold">WhatsApp connection</h2>
         <Link href="/settings/connect-whatsapp" prefetch={false} className={buttonVariants({ variant: 'outline' })}>
-          Connect WhatsApp
+          Preview setup
         </Link>
       </section>
     ) : (
